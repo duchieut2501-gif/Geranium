@@ -181,6 +181,11 @@ struct LocationListView: View {
                         .font(.subheadline)
                         .foregroundColor(.gray)
                         .lineLimit(2)
+                    if list == .history, item.date > 0 {
+                        Text(Self.dateFormatter.string(from: Date(timeIntervalSince1970: item.date)))
+                            .font(.footnote)
+                            .foregroundColor(.gray)
+                    }
                 }
                 Spacer(minLength: 4)
                 Image(systemName: "chevron.right")
@@ -211,9 +216,6 @@ struct LocationListView: View {
 
     private func subtitle(_ item: Bookmark, showFolder: Bool) -> String {
         var s = coordLine(item)
-        if list == .history, item.date > 0 {
-            s += "  ·  " + Self.dateFormatter.string(from: Date(timeIntervalSince1970: item.date))
-        }
         if showFolder, !item.folders.isEmpty { s = "📁 \(item.folders.joined(separator: ", "))  ·  " + s }
         return s
     }
@@ -228,7 +230,7 @@ struct LocationListView: View {
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "HH:mm dd/MM"
+        f.dateFormat = "HH:mm 'ngày' dd/MM/yyyy"
         return f
     }()
 
