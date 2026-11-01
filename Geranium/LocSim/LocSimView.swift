@@ -29,13 +29,13 @@ struct PlayTriangle: Shape {
 enum MainTab: String, CaseIterable, Identifiable {
     case map, places
     var id: String { rawValue }
-    var title: String { self == .map ? "Bản đồ" : "Vị trí" }
+    var title: String { self == .map ? L("Bản đồ", "Map") : L("Danh sách", "List") }
 }
 
 enum PlacesTab: String, CaseIterable, Identifiable {
     case bookmarks, history
     var id: String { rawValue }
-    var title: String { self == .bookmarks ? "Đánh dấu" : "Lịch sử" }
+    var title: String { self == .bookmarks ? L("Đánh dấu", "Bookmarks") : L("Lịch sử", "History") }
     var list: LocList { self == .bookmarks ? .bookmarks : .history }
 }
 
@@ -45,10 +45,10 @@ enum TextSizeOption: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .small: return "Nhỏ"
-        case .medium: return "Vừa"
-        case .large: return "Lớn"
-        case .xlarge: return "Rất lớn"
+        case .small: return L("Nhỏ", "Small")
+        case .medium: return L("Vừa", "Medium")
+        case .large: return L("Lớn", "Large")
+        case .xlarge: return L("Rất lớn", "Extra large")
         }
     }
     var dynamicType: DynamicTypeSize {
@@ -76,6 +76,7 @@ struct LocSimView: View {
     @AppStorage("textSize") private var textSize: String = TextSizeOption.small.rawValue
     /// "lat,long" of the place being simulated ("" = none). Lists use it to mark that row red.
     @AppStorage("activeLoc") private var activeLoc: String = ""
+    @AppStorage("appLanguage") private var appLanguage: String = "en"
 
     var body: some View {
         NavigationView {
@@ -131,6 +132,7 @@ struct LocSimView: View {
             }
         }
         .navigationViewStyle(.stack)
+        .id(appLanguage)                                  // rebuild everything when the language changes
         .dynamicTypeSize((TextSizeOption(rawValue: textSize) ?? .small).dynamicType)
         .onChange(of: tab) { newTab in
             if newTab == .places { placesTab = .bookmarks }   // always open on Bookmarks
@@ -150,7 +152,7 @@ struct LocSimView: View {
             .sheet(item: $savePin) { edit in
                 PlaceEditView(edit: edit, folders: loadFolders()) { r in
                     let added = addToBookmarks(name: r.name, lat: r.lat, long: r.long, folders: r.folders)
-                    AlertKitAPI.present(title: added ? "Đã lưu vào Đánh dấu" : "Đã cập nhật trong Đánh dấu",
+                    AlertKitAPI.present(title: added ? L("Đã lưu vào Đánh dấu", "Saved to Bookmarks") : L("Đã cập nhật trong Đánh dấu", "Updated in Bookmarks"),
                                         icon: .done, style: .iOS17AppleMusic, haptic: .success)
                 }
                 .dynamicTypeSize((TextSizeOption(rawValue: textSize) ?? .small).dynamicType)
@@ -204,7 +206,7 @@ struct LocSimView: View {
                     .background(Capsule().fill(.ultraThinMaterial))
                     .onTapGesture {
                         UIPasteboard.general.string = coordinateText
-                        AlertKitAPI.present(title: "Đã sao chép toạ độ", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+                        AlertKitAPI.present(title: L("Đã sao chép toạ độ", "Coordinates copied"), icon: .done, style: .iOS17AppleMusic, haptic: .success)
                     }
                 HStack(alignment: .bottom) {
                     // Play (always available, re-play moves to the new pin) + Stop (grey → red while simulating)
@@ -256,7 +258,7 @@ struct LocSimView: View {
     }
 
     private var coordinateText: String {
-        guard let c = centerCoordinate else { return "Đang tải bản đồ…" }
+        guard let c = centerCoordinate else { return L("Đang tải bản đồ…", "Loading map…") }
         return String(format: "%.6f, %.6f", c.latitude, c.longitude)
     }
 
@@ -264,7 +266,7 @@ struct LocSimView: View {
 
     private func startAtPin() {
         guard let center = centerCoordinate, CLLocationCoordinate2DIsValid(center) else {
-            UIApplication.shared.alert(body: "Bản đồ chưa sẵn sàng, thử lại sau giây lát.")
+            UIApplication.shared.alert(body: L("Bản đồ chưa sẵn sàng, thử lại sau giây lát.", "The map is not ready yet, try again in a moment."))
             return
         }
         fake(wgs: CoordTransform.gcj02ToWgs84(center))   // only changes anything inside mainland China
@@ -278,23 +280,23 @@ struct LocSimView: View {
         isFaking = true
         activeLoc = "\(wgs.latitude),\(wgs.longitude)"
         logToHistory(lat: wgs.latitude, long: wgs.longitude)
-        AlertKitAPI.present(title: "Đã bắt đầu giả lập", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        AlertKitAPI.present(title: L("Đã bắt đầu giả lập", "Simulation started"), icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
 
     private func enterCoordinates() {
-        let alert = UIAlertController(title: "Giả lập theo toạ độ",
-                                      message: "Có thể dán cả cặp \"21.05, 105.91\" vào ô Vĩ độ.",
+        let alert = UIAlertController(title: L("Giả lập theo toạ độ", "Simulate coordinates"),
+                                      message: L("Có thể dán cả cặp \"21.05, 105.91\" vào ô Vĩ độ.", "You can paste a pair like \"21.05, 105.91\" into Latitude."),
                                       preferredStyle: .alert)
-        alert.addTextField { f in f.placeholder = "Vĩ độ (latitude)"; f.keyboardType = .numbersAndPunctuation }
-        alert.addTextField { f in f.placeholder = "Kinh độ (longitude)"; f.keyboardType = .numbersAndPunctuation }
-        alert.addAction(UIAlertAction(title: "Huỷ", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Giả lập", style: .default) { _ in
+        alert.addTextField { f in f.placeholder = L("Vĩ độ (latitude)", "Latitude"); f.keyboardType = .numbersAndPunctuation }
+        alert.addTextField { f in f.placeholder = L("Kinh độ (longitude)", "Longitude"); f.keyboardType = .numbersAndPunctuation }
+        alert.addAction(UIAlertAction(title: L("Huỷ", "Cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(title: L("Giả lập", "Simulate"), style: .default) { _ in
             let latText = alert.textFields?[0].text ?? "", longText = alert.textFields?[1].text ?? ""
             let clean: (String) -> String = { $0.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces) }
             var la = Double(clean(latText)), lo = Double(clean(longText))
             if lo == nil, let pair = parseText(latText).first { la = pair.lat; lo = pair.long }   // pasted "lat, long"
             guard let la, let lo, (-90...90).contains(la), (-180...180).contains(lo) else {
-                UIApplication.shared.alert(body: "Toạ độ không hợp lệ.")
+                UIApplication.shared.alert(body: L("Toạ độ không hợp lệ.", "Invalid coordinates."))
                 return
             }
             let typed = CLLocationCoordinate2D(latitude: la, longitude: lo)
@@ -325,7 +327,7 @@ struct LocSimView: View {
         LocSimManager.stopLocSim()
         withAnimation(.easeInOut(duration: 0.2)) { isFaking = false }
         activeLoc = ""
-        AlertKitAPI.present(title: "Đã dừng giả lập", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        AlertKitAPI.present(title: L("Đã dừng giả lập", "Simulation stopped"), icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
 }
 
@@ -358,14 +360,14 @@ enum AppIconChoice: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .e: return "Bản đồ"
-        case .i: return "Vòng ngắm"
-        case .dColor: return "Ghim đôi màu"
-        case .eColor: return "Bản đồ màu"
-        case .d: return "Ghim đôi"
-        case .h: return "Ghim đặc"
-        case .g: return "Ghim nét"
-        case .custom: return "Ảnh của bạn"
+        case .e: return L("Bản đồ", "Map")
+        case .i: return L("Vòng ngắm", "Target")
+        case .dColor: return L("Ghim đôi màu", "Two pins (colour)")
+        case .eColor: return L("Bản đồ màu", "Map (colour)")
+        case .d: return L("Ghim đôi", "Two pins")
+        case .h: return L("Ghim đặc", "Solid pin")
+        case .g: return L("Ghim nét", "Outline pin")
+        case .custom: return L("Ảnh của bạn", "Your photo")
         }
     }
 
@@ -395,11 +397,11 @@ enum AppCustomizer {
 
     /// "Respring now / Later" question.
     static func askRespring(onLater: (() -> Void)? = nil) {
-        let alert = UIAlertController(title: "Cần respring để áp dụng",
-                                      message: "Đã lưu thay đổi. Màn hình chính cần khởi động lại (respring) thì tên / biểu tượng mới hiện ra.",
+        let alert = UIAlertController(title: L("Cần respring để áp dụng", "Respring needed"),
+                                      message: L("Đã lưu thay đổi. Màn hình chính cần khởi động lại (respring) thì tên / biểu tượng mới hiện ra.", "Changes saved. The home screen needs to restart (respring) to show the new name / icon."),
                                       preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "Để sau", style: .cancel) { _ in onLater?() })
-        alert.addAction(UIAlertAction(title: "Respring ngay", style: .default) { _ in respringNow() })
+        alert.addAction(UIAlertAction(title: L("Để sau", "Later"), style: .cancel) { _ in onLater?() })
+        alert.addAction(UIAlertAction(title: L("Respring ngay", "Respring now"), style: .default) { _ in respringNow() })
         presentTop(alert)
     }
 
@@ -441,9 +443,9 @@ enum AppCustomizer {
         case readInfo, writeTemp, rootWrite
         var errorDescription: String? {
             switch self {
-            case .readInfo: return "Không đọc được thông tin app."
-            case .writeTemp: return "Không ghi được file tạm."
-            case .rootWrite: return "Không ghi được vào app. App phải được cài bằng TrollStore."
+            case .readInfo: return L("Không đọc được thông tin app.", "Could not read the app info.")
+            case .writeTemp: return L("Không ghi được file tạm.", "Could not write a temporary file.")
+            case .rootWrite: return L("Không ghi được vào app. App phải được cài bằng TrollStore.", "Could not write into the app. It must be installed with TrollStore.")
             }
         }
     }
@@ -568,6 +570,7 @@ struct CustomizeAppView: View {
     var onFakeCoordinate: ((CLLocationCoordinate2D) -> Void)? = nil
     @AppStorage("locAltitude") private var altitude: String = "0"
     @AppStorage("textSize") private var textSize: String = TextSizeOption.small.rawValue
+    @AppStorage("appLanguage") private var appLanguage: String = "en"
     @State private var manualLat = ""
     @State private var manualLong = ""
     @State private var choice = AppIconChoice(rawValue: AppCustomizer.storedChoice) ?? .e
@@ -593,10 +596,10 @@ struct CustomizeAppView: View {
                         Button {
                             AppCustomizer.respringNow()
                         } label: {
-                            Label("Respring ngay để áp dụng", systemImage: "arrow.clockwise")
+                            Label(L("Respring ngay để áp dụng", "Respring now to apply"), systemImage: "arrow.clockwise")
                         }
                     } footer: {
-                        Text("Có thay đổi tên / biểu tượng chưa áp dụng. Bấm để respring, hoặc để sau: thay đổi sẽ hiện ra lần respring hoặc khởi động lại máy tiếp theo.")
+                        Text(L("Có thay đổi tên / biểu tượng chưa áp dụng. Bấm để respring, hoặc để sau: thay đổi sẽ hiện ra lần respring hoặc khởi động lại máy tiếp theo.", "Name / icon changes are waiting. Tap to respring, or later: they will appear after the next respring or restart."))
                     }
                 }
                 Section {
@@ -606,28 +609,28 @@ struct CustomizeAppView: View {
                                 croppedIcon = nil
                                 AppCustomizer.setBuiltIn(option) { ok in
                                     if ok { choice = option }
-                                    else { UIApplication.shared.alert(body: "Không đổi được biểu tượng.") }
+                                    else { UIApplication.shared.alert(body: L("Không đổi được biểu tượng.", "Could not change the icon.")) }
                                 }
                             }
                         }
-                        iconTile(image: croppedIcon, title: "Ảnh của bạn", selected: croppedIcon != nil || choice == .custom, placeholder: "photo.badge.plus") {
+                        iconTile(image: croppedIcon, title: L("Ảnh của bạn", "Your photo"), selected: croppedIcon != nil || choice == .custom, placeholder: "photo.badge.plus") {
                             showPicker = true
                         }
                     }
                     .padding(.vertical, 6)
                 } header: {
-                    Text("Biểu tượng")
+                    Text(L("Biểu tượng", "Icon"))
                 } footer: {
-                    Text("7 mẫu có sẵn đổi ngay. \"Ảnh của bạn\": chọn ảnh, cắt cho vừa khung rồi bấm Áp dụng ở dưới.")
+                    Text(L("7 mẫu có sẵn đổi ngay. \"Ảnh của bạn\": chọn ảnh, cắt cho vừa khung rồi bấm Áp dụng ở dưới.", "Built-in icons change instantly. \"Your photo\": pick a photo, crop it, then tap Apply below."))
                 }
 
                 Section {
-                    TextField("Tên hiển thị", text: $name)
+                    TextField(L("Tên hiển thị", "Display name"), text: $name)
                         .disableAutocorrection(true)
                 } header: {
-                    Text("Tên dưới biểu tượng")
+                    Text(L("Tên dưới biểu tượng", "Name under the icon"))
                 } footer: {
-                    Text("Tên ngắn (khoảng 12 ký tự) sẽ hiện đầy đủ, tên dài sẽ bị cắt bớt.")
+                    Text(L("Tên ngắn (khoảng 12 ký tự) sẽ hiện đầy đủ, tên dài sẽ bị cắt bớt.", "Short names (about 12 characters) show in full; longer names get cut off."))
                 }
 
                 Section {
@@ -636,27 +639,37 @@ struct CustomizeAppView: View {
                     } label: {
                         HStack {
                             Spacer()
-                            if busy { ProgressView() } else { Text("Áp dụng").bold() }
+                            if busy { ProgressView() } else { Text(L("Áp dụng", "Apply")).bold() }
                             Spacer()
                         }
                     }
                     .disabled(busy || (!nameChanged && croppedIcon == nil))
                 } footer: {
-                    Text("Đổi tên hoặc dùng ảnh riêng cần respring mới hiện ra. App sẽ hỏi bạn respring ngay hay để sau.")
+                    Text(L("Đổi tên hoặc dùng ảnh riêng cần respring mới hiện ra. App sẽ hỏi bạn respring ngay hay để sau.", "A new name or photo icon needs a respring to show. The app will ask: now or later."))
                 }
 
                 Section {
-                    Picker("Cỡ chữ", selection: $textSize) {
+                    Picker("Language", selection: $appLanguage) {
+                        Text("English").tag("en")
+                        Text("Tiếng Việt").tag("vi")
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text(L("Ngôn ngữ / Language", "Language / Ngôn ngữ"))
+                }
+
+                Section {
+                    Picker(L("Cỡ chữ", "Text size"), selection: $textSize) {
                         ForEach(TextSizeOption.allCases) { Text($0.title).tag($0.rawValue) }
                     }
                     .pickerStyle(.segmented)
                 } header: {
-                    Text("Cỡ chữ")
+                    Text(L("Cỡ chữ", "Text size"))
                 }
 
                 Section {
                     HStack {
-                        Text("Độ cao (m)")
+                        Text(L("Độ cao (m)", "Altitude (m)"))
                         Spacer()
                         TextField("0", text: $altitude)
                             .keyboardType(.numbersAndPunctuation)
@@ -664,13 +677,13 @@ struct CustomizeAppView: View {
                             .frame(width: 100)
                     }
                 } header: {
-                    Text("Độ cao")
+                    Text(L("Độ cao", "Altitude"))
                 }
 
                 Section {
-                    Button("Khôi phục mặc định", role: .destructive) {
-                        UIApplication.shared.confirmAlert(title: "Khôi phục mặc định?",
-                                                          body: "Tên về \"Location Simulator\", biểu tượng về mẫu Bản đồ.",
+                    Button(L("Khôi phục mặc định", "Restore defaults"), role: .destructive) {
+                        UIApplication.shared.confirmAlert(title: L("Khôi phục mặc định?", "Restore defaults?"),
+                                                          body: L("Tên về \"Location Simulator\", biểu tượng về mẫu Bản đồ.", "Name back to \"Location Simulator\", icon back to Map."),
                                                           onOK: {
                             AppCustomizer.resetToDefault { error in
                                 if let error { UIApplication.shared.alert(body: error.localizedDescription) }
@@ -680,12 +693,12 @@ struct CustomizeAppView: View {
                     }
                 }
             }
-            .navigationTitle("Cài đặt")
+            .navigationTitle(L("Cài đặt", "Settings"))
             .dynamicTypeSize((TextSizeOption(rawValue: textSize) ?? .small).dynamicType)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Đóng") { dismiss() }
+                    Button(L("Đóng", "Close")) { dismiss() }
                 }
             }
             .sheet(isPresented: $showPicker) {
@@ -713,7 +726,7 @@ struct CustomizeAppView: View {
         var la = Double(clean(manualLat)), lo = Double(clean(manualLong))
         if lo == nil, let pair = parseText(manualLat).first { la = pair.lat; lo = pair.long }   // pasted "lat, long"
         guard let la, let lo, (-90...90).contains(la), (-180...180).contains(lo) else {
-            UIApplication.shared.alert(body: "Toạ độ không hợp lệ.")
+            UIApplication.shared.alert(body: L("Toạ độ không hợp lệ.", "Invalid coordinates."))
             return
         }
         dismiss()
@@ -816,7 +829,7 @@ struct IconCropView: View {
             let base = side / min(image.size.width, image.size.height)   // fill the square at scale 1
             VStack(spacing: 24) {
                 Spacer()
-                Text("Kéo và chụm 2 ngón để cắt ảnh")
+                Text(L("Kéo và chụm 2 ngón để cắt ảnh", "Drag and pinch to crop"))
                     .foregroundColor(.white.opacity(0.8))
                 ZStack {
                     Image(uiImage: image)
@@ -851,7 +864,7 @@ struct IconCropView: View {
 
                 // Small home-screen-size preview
                 HStack(spacing: 14) {
-                    Text("Xem trước:").foregroundColor(.white.opacity(0.8)).font(.footnote)
+                    Text(L("Xem trước:", "Preview:")).foregroundColor(.white.opacity(0.8)).font(.footnote)
                     Image(uiImage: render(side: side, base: base, px: 180))
                         .resizable()
                         .frame(width: 60, height: 60)
@@ -859,10 +872,10 @@ struct IconCropView: View {
                 }
                 Spacer()
                 HStack {
-                    Button("Huỷ") { onDone(nil) }
+                    Button(L("Huỷ", "Cancel")) { onDone(nil) }
                         .foregroundColor(.white)
                     Spacer()
-                    Button("Dùng ảnh này") { onDone(render(side: side, base: base, px: 1024)) }
+                    Button(L("Dùng ảnh này", "Use this photo")) { onDone(render(side: side, base: base, px: 1024)) }
                         .font(.headline)
                         .foregroundColor(.yellow)
                 }

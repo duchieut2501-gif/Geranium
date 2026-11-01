@@ -11,6 +11,11 @@ import CoreLocation
 
 let sharedUserDefaultsSuiteName = "group.live.cclerc.geraniumBookmarks"
 
+/// App language (Settings). Default English.
+var appIsVietnamese: Bool { UserDefaults.standard.string(forKey: "appLanguage") == "vi" }
+/// Picks the Vietnamese or English text.
+func L(_ vi: String, _ en: String) -> String { appIsVietnamese ? vi : en }
+
 // MARK: - Model
 
 struct Bookmark: Identifiable, Equatable {
@@ -57,7 +62,7 @@ enum LocList: String {
 
     /// "bookmarks" key is shared with the Apple Maps "save location" extension.
     var key: String { self == .history ? "history" : "bookmarks" }
-    var title: String { self == .history ? "Lịch sử" : "Đánh dấu" }
+    var title: String { self == .history ? L("Lịch sử", "History") : L("Đánh dấu", "Bookmarks") }
     var fileTag: String { self == .history ? "LichSu" : "DanhDau" }
 }
 
@@ -169,11 +174,27 @@ func updateItem(_ list: LocList, id: String, name: String, lat: Double, long: Do
 
 private let foldersKey = "folders"
 
-/// All list names, A→Z (Vietnamese order). Includes lists that are still empty.
+private let favFoldersKey = "favFolders"
+
+/// All list names: favourite lists first, then the rest, each A→Z. Includes lists that are still empty.
 func loadFolders() -> [String] {
     var names = Set(store?.array(forKey: foldersKey) as? [String] ?? [])
     for b in loadList(.bookmarks) { b.folders.forEach { names.insert($0) } }
-    return names.sorted { $0.compare($1, options: [.caseInsensitive, .numeric], range: nil, locale: Locale(identifier: "vi_VN")) == .orderedAscending }
+    let fav = favouriteFolders()
+    let az: (String, String) -> Bool = {
+        $0.compare($1, options: [.caseInsensitive, .numeric], range: nil, locale: Locale(identifier: "vi_VN")) == .orderedAscending
+    }
+    return names.filter { fav.contains($0) }.sorted(by: az) + names.filter { !fav.contains($0) }.sorted(by: az)
+}
+
+func favouriteFolders() -> Set<String> { Set(store?.array(forKey: favFoldersKey) as? [String] ?? []) }
+
+func setFavouriteFolder(_ name: String, _ on: Bool) {
+    var fav = favouriteFolders()
+    if on { fav.insert(name) } else { fav.remove(name) }
+    store?.set(Array(fav), forKey: favFoldersKey)
+    store?.synchronize()
+    NotificationCenter.default.post(name: .locListChanged, object: LocList.bookmarks.rawValue)
 }
 
 private func saveFolders(_ names: [String]) {
@@ -192,6 +213,7 @@ func createFolder(_ name: String) {
 func renameFolder(_ old: String, to new: String) {
     let n = new.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !n.isEmpty, n != old else { return }
+    if favouriteFolders().contains(old) { setFavouriteFolder(old, false); setFavouriteFolder(n, true) }
     var names = (store?.array(forKey: foldersKey) as? [String] ?? []).filter { $0 != old }
     if !names.contains(n) { names.append(n) }
     saveFolders(names)
@@ -224,6 +246,7 @@ func saveFolder(original: String?, name: String, memberIDs: Set<String>, keepOth
 
 /// Deletes the list. Places inside are kept and moved out of the list.
 func deleteFolder(_ name: String) {
+    setFavouriteFolder(name, false)
     saveFolders((store?.array(forKey: foldersKey) as? [String] ?? []).filter { $0 != name })
     var items = loadList(.bookmarks)
     for i in items.indices { items[i].folders.removeAll { $0 == name } }
@@ -269,10 +292,10 @@ enum BookmarkSort: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .az: return "Tên A → Z"
-        case .za: return "Tên Z → A"
-        case .newest: return "Mới nhất"
-        case .oldest: return "Cũ nhất"
+        case .az: return L("Tên A → Z", "Name A → Z")
+        case .za: return L("Tên Z → A", "Name Z → A")
+        case .newest: return L("Mới nhất", "Newest")
+        case .oldest: return L("Cũ nhất", "Oldest")
         }
     }
 }
@@ -345,8 +368,12 @@ func exportText(_ list: LocList, _ items: [Bookmark]) -> String {
     let day = DateFormatter()
     day.dateFormat = "dd/MM/yyyy"
     var lines = ["# Location Simulator - \(list.title) - \(day.string(from: Date()))",
-                 "# Tên | Vĩ độ, Kinh độ | Thời gian | Danh sách (cách nhau bằng ;) | ★ = Yêu thích"]
+                 L("# Tên | Vĩ độ, Kinh độ | Thời gian | Danh sách (cách nhau bằng ;) | ★ = Yêu thích", "# Name | Latitude, Longitude | Time | Lists (separated by ;) | ★ = Favourite")]
     let clean: (String) -> String = { $0.replacingOccurrences(of: "|", with: "/").replacingOccurrences(of: "\n", with: " ") }
+    if list == .bookmarks {
+        let favs = favouriteFolders().filter { f in items.contains { $0.folders.contains(f) } }.sorted()
+        if !favs.isEmpty { lines.append("#★ " + favs.map(clean).joined(separator: "; ")) }
+    }
     for b in items {
         var line = "\(clean(b.displayName)) | " + String(format: "%.7f, %.7f", b.lat, b.long)
         let time = b.date > 0 ? lineDateFormatter.string(from: Date(timeIntervalSince1970: b.date)) : ""
@@ -380,6 +407,14 @@ private func parseCoord(_ s: String) -> (Double, Double)? {
           let lo = Double(ns.substring(with: m.range(at: 2))),
           (-90...90).contains(la), (-180...180).contains(lo) else { return nil }
     return (la, lo)
+}
+
+/// Favourite list names from a "#★ A; B" line in an exported file.
+func parseFavouriteFolders(_ text: String) -> [String] {
+    for line in text.components(separatedBy: .newlines) where line.hasPrefix("#★") {
+        return cleanLists(String(line.dropFirst(2)).components(separatedBy: ";"))
+    }
+    return []
 }
 
 func parseText(_ text: String) -> [Bookmark] {

@@ -1,4 +1,4 @@
-name: Build LocSim .tipa
+name: Build Location Simulator
 
 on:
   push:
@@ -51,6 +51,6 @@ jobs:
         run: |
           gh release delete build -y --cleanup-tag -R "$GITHUB_REPOSITORY" || true
           gh release create build build/LocationSimulator.tipa -R "$GITHUB_REPOSITORY" \
-            --title "Location Simulator (bản mới nhất)" \
-            --notes "Bản build lúc $(TZ=Asia/Ho_Chi_Minh date '+%H:%M %d/%m/%Y'). Mở file LocationSimulator.tipa bằng TrollStore." \
+            --title "Location Simulator (latest build)" \
+            --notes "Built at $(TZ=Asia/Ho_Chi_Minh date '+%H:%M, %d/%m/%Y') (UTC+7). Open LocationSimulator.tipa with TrollStore to install." \
             --target "$GITHUB_SHA" --latest

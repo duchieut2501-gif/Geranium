@@ -28,6 +28,7 @@ struct LocationListView: View {
 
     @State private var items: [Bookmark] = []
     @State private var folders: [String] = []
+    @State private var favFolders: Set<String> = []
     @State private var search = ""
     @AppStorage("sort_history") private var sortHistory: String = BookmarkSort.newest.rawValue
     @AppStorage("sort_bookmarks") private var sortBookmarks: String = BookmarkSort.az.rawValue
@@ -72,17 +73,17 @@ struct LocationListView: View {
         }
         .confirmationDialog(selected?.displayName ?? "", isPresented: $showMenu, titleVisibility: .visible) {
             if let item = selected {
-                Button("Giả lập vị trí này") { onStart(item); reload() }
-                Button("Đặt vị trí này lên bản đồ") { onShowOnMap(item) }
-                Button("Sửa vị trí") { openEdit(PlaceEdit(mode: .edit, list: list, item: item)) }
+                Button(L("Giả lập vị trí này", "Simulate this location")) { onStart(item); reload() }
+                Button(L("Đặt vị trí này lên bản đồ", "Show on map")) { onShowOnMap(item) }
+                Button(L("Sửa vị trí", "Edit location")) { openEdit(PlaceEdit(mode: .edit, list: list, item: item)) }
                 if list == .bookmarks {
-                    Button(item.favorite ? "Bỏ khỏi Yêu thích" : "Thêm vào Yêu thích") { setFavorite(id: item.id, !item.favorite) }
+                    Button(item.favorite ? L("Bỏ khỏi Yêu thích", "Remove from Favourites") : L("Thêm vào Yêu thích", "Add to Favourites")) { setFavorite(id: item.id, !item.favorite) }
                 }
                 if list == .history {
-                    Button("Thêm vào Đánh dấu") { openEdit(PlaceEdit(mode: .newBookmark, list: .bookmarks, item: item)) }
+                    Button(L("Thêm vào Đánh dấu", "Add to Bookmarks")) { openEdit(PlaceEdit(mode: .newBookmark, list: .bookmarks, item: item)) }
                 }
-                Button("Xoá", role: .destructive) { remove(item) }
-                Button("Huỷ", role: .cancel) {}
+                Button(L("Xoá", "Delete"), role: .destructive) { remove(item) }
+                Button(L("Huỷ", "Cancel"), role: .cancel) {}
             }
         } message: {
             if let item = selected { Text(coordLine(item)) }
@@ -150,7 +151,7 @@ struct LocationListView: View {
                 .font(.system(size: 18))
                 .foregroundColor(.yellow)
                 .frame(width: 26)
-            Text("Yêu thích")
+            Text(L("Yêu thích", "Favourites"))
                 .font(.body.weight(.semibold))
             Text("\(count)")
                 .font(.subheadline)
@@ -163,17 +164,24 @@ struct LocationListView: View {
     private func sorted(_ arr: [Bookmark]) -> [Bookmark] { filterAndSort(arr, search: "", sort: sort) }
 
     private func placeRow(_ item: Bookmark, indent: Bool, showFolder: Bool) -> some View {
-        Button {
-            searchFocused = false
-            hideKeyboard()
-            selected = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { showMenu = true }
-        } label: {
-            HStack(spacing: 12) {
+        HStack(spacing: 12) {
+            // Tap the icon = simulate this place right away
+            Button {
+                searchFocused = false
+                hideKeyboard()
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                onStart(item)
+                reload()
+            } label: {
                 Image(systemName: "location.viewfinder")
                     .font(.system(size: 20, weight: isActive(item) ? .semibold : .light))
                     .foregroundColor(isActive(item) ? .red : .secondary)
-                    .frame(width: 26)
+                    .frame(width: 34, height: 34)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            // Name: tap does nothing, press and hold opens the menu
+            HStack(spacing: 4) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text((usesFolders && item.favorite ? "⭐ " : "") + item.displayName)
                         .font(.body)
@@ -184,7 +192,7 @@ struct LocationListView: View {
                         .foregroundColor(.gray)
                         .lineLimit(2)
                     if list == .history, item.date > 0 {
-                        Text(Self.dateFormatter.string(from: Date(timeIntervalSince1970: item.date)))
+                        Text(dateText(item.date))
                             .font(.footnote)
                             .foregroundColor(.gray)
                     }
@@ -194,18 +202,24 @@ struct LocationListView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(Color(.tertiaryLabel))
             }
-            .padding(.leading, indent ? 22 : 0)
             .contentShape(Rectangle())
+            .onLongPressGesture(minimumDuration: 0.35) {
+                searchFocused = false
+                hideKeyboard()
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                selected = item
+                showMenu = true
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.leading, indent ? 22 : 0)
         .listRowInsets(EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14))
         .swipeActions(edge: .trailing) {
-            Button(role: .destructive) { remove(item) } label: { Label("Xoá", systemImage: "trash") }
-            Button { openEdit(PlaceEdit(mode: .edit, list: list, item: item)) } label: { Label("Sửa", systemImage: "pencil") }
+            Button(role: .destructive) { remove(item) } label: { Label(L("Xoá", "Delete"), systemImage: "trash") }
+            Button { openEdit(PlaceEdit(mode: .edit, list: list, item: item)) } label: { Label(L("Sửa", "Edit"), systemImage: "pencil") }
                 .tint(.orange)
             if usesFolders {
                 Button { setFavorite(id: item.id, !item.favorite) } label: {
-                    Label(item.favorite ? "Bỏ thích" : "Yêu thích", systemImage: item.favorite ? "star.slash" : "star")
+                    Label(item.favorite ? L("Bỏ thích", "Unfavourite") : L("Yêu thích", "Favourites"), systemImage: item.favorite ? "star.slash" : "star")
                 }
                 .tint(.yellow)
             }
@@ -220,7 +234,7 @@ struct LocationListView: View {
     }
 
     private func coordLine(_ item: Bookmark) -> String {
-        "Kinh độ:\(fmt(item.long))  Vĩ độ:\(fmt(item.lat))"
+        L("Kinh độ:\(fmt(item.long))  Vĩ độ:\(fmt(item.lat))", "Longitude:\(fmt(item.long))  Latitude:\(fmt(item.lat))")
     }
 
     private func subtitle(_ item: Bookmark, showFolder: Bool) -> String {
@@ -237,11 +251,11 @@ struct LocationListView: View {
         return t
     }
 
-    private static let dateFormatter: DateFormatter = {
+    private func dateText(_ t: Double) -> String {
         let f = DateFormatter()
-        f.dateFormat = "HH:mm 'ngày' dd/MM/yyyy"
-        return f
-    }()
+        f.dateFormat = appIsVietnamese ? "HH:mm 'ngày' dd/MM/yyyy" : "HH:mm, dd/MM/yyyy"
+        return f.string(from: Date(timeIntervalSince1970: t))
+    }
 
     private func folderRow(_ folder: String) -> some View {
         let count = items.filter { $0.folders.contains(folder) }.count
@@ -250,9 +264,9 @@ struct LocationListView: View {
             if viewMode == .all { toggle(folder) } else { openFolder = folder }
         } label: {
             HStack(spacing: 12) {
-                Image(systemName: "folder.fill")
+                Image(systemName: favFolders.contains(folder) ? "star.square.on.square.fill" : "folder.fill")
                     .font(.system(size: 18))
-                    .foregroundColor(.accentColor)
+                    .foregroundColor(favFolders.contains(folder) ? .yellow : .accentColor)
                     .frame(width: 26)
                 Text(folder)
                     .font(.body.weight(.semibold))
@@ -271,12 +285,16 @@ struct LocationListView: View {
         .buttonStyle(.plain)
         .listRowInsets(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
         .swipeActions(edge: .trailing) {
-            Button(role: .destructive) { askDeleteFolder(folder) } label: { Label("Xoá", systemImage: "trash") }
-            Button { askRenameFolder(folder) } label: { Label("Sửa", systemImage: "pencil") }.tint(.orange)
+            Button(role: .destructive) { askDeleteFolder(folder) } label: { Label(L("Xoá", "Delete"), systemImage: "trash") }
+            Button { askRenameFolder(folder) } label: { Label(L("Sửa", "Edit"), systemImage: "pencil") }.tint(.orange)
         }
         .contextMenu {
-            Button { askRenameFolder(folder) } label: { Label("Sửa danh sách", systemImage: "pencil") }
-            Button(role: .destructive) { askDeleteFolder(folder) } label: { Label("Xoá danh sách", systemImage: "trash") }
+            Button { setFavouriteFolder(folder, !favFolders.contains(folder)); reload() } label: {
+                Label(favFolders.contains(folder) ? L("Bỏ khỏi Yêu thích", "Remove from Favourites") : L("Thêm vào Yêu thích", "Add to Favourites"),
+                      systemImage: favFolders.contains(folder) ? "star.slash" : "star")
+            }
+            Button { askRenameFolder(folder) } label: { Label(L("Sửa danh sách", "Edit list"), systemImage: "pencil") }
+            Button(role: .destructive) { askDeleteFolder(folder) } label: { Label(L("Xoá danh sách", "Delete list"), systemImage: "trash") }
         }
     }
 
@@ -287,7 +305,7 @@ struct LocationListView: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.left")
-                    Text("Tất cả")
+                    Text(L("Tất cả", "All"))
                 }
             }
             Spacer()
@@ -308,7 +326,7 @@ struct LocationListView: View {
         HStack(spacing: 10) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundColor(.secondary)
-                TextField("Tìm trong \(list.title)", text: $search)
+                TextField(L("Tìm trong \(list.title)", "Search \(list.title)"), text: $search)
                     .disableAutocorrection(true)
                     .focused($searchFocused)
                     .submitLabel(.search)
@@ -321,13 +339,13 @@ struct LocationListView: View {
 
             Menu {
                 if usesFolders {
-                    Picker("Hiển thị", selection: $viewModeRaw) {
-                        Label("Hiện tất cả địa điểm", systemImage: "list.bullet.indent").tag(BookmarkViewMode.all.rawValue)
-                        Label("Hiện theo danh sách", systemImage: "folder").tag(BookmarkViewMode.folders.rawValue)
+                    Picker(L("Hiển thị", "Show"), selection: $viewModeRaw) {
+                        Label(L("Hiện tất cả địa điểm", "Show all places"), systemImage: "list.bullet.indent").tag(BookmarkViewMode.all.rawValue)
+                        Label(L("Hiện theo danh sách", "Show by list"), systemImage: "folder").tag(BookmarkViewMode.folders.rawValue)
                     }
                     Divider()
                 }
-                Picker("Sắp xếp", selection: sortRaw) {
+                Picker(L("Sắp xếp", "Sort"), selection: sortRaw) {
                     ForEach(BookmarkSort.allCases) { Text($0.label).tag($0.rawValue) }
                 }
             } label: {
@@ -336,14 +354,14 @@ struct LocationListView: View {
 
             Menu {
                 if usesFolders {
-                    Button { askNewFolder() } label: { Label("Tạo danh sách mới", systemImage: "folder.badge.plus") }
+                    Button { askNewFolder() } label: { Label(L("Tạo danh sách mới", "New list"), systemImage: "folder.badge.plus") }
                     Divider()
                 }
-                Button { share() } label: { Label("Xuất file (.txt)", systemImage: "square.and.arrow.up") }
-                Button { copyText() } label: { Label("Sao chép văn bản", systemImage: "doc.on.doc") }
+                Button { share() } label: { Label(L("Xuất file (.txt)", "Export file (.txt)"), systemImage: "square.and.arrow.up") }
+                Button { copyText() } label: { Label(L("Sao chép văn bản", "Copy as text"), systemImage: "doc.on.doc") }
                 Divider()
-                Button { showImporter = true } label: { Label("Nhập từ file", systemImage: "square.and.arrow.down") }
-                Button { showPaste = true } label: { Label("Dán văn bản", systemImage: "doc.on.clipboard") }
+                Button { showImporter = true } label: { Label(L("Nhập từ file", "Import from file"), systemImage: "square.and.arrow.down") }
+                Button { showPaste = true } label: { Label(L("Dán văn bản", "Paste text"), systemImage: "doc.on.clipboard") }
             } label: {
                 Image(systemName: "ellipsis.circle").font(.system(size: 18))
             }
@@ -357,17 +375,17 @@ struct LocationListView: View {
     private var emptyState: some View {
         if items.isEmpty && folders.isEmpty {
             VStack(spacing: 8) {
-                Text(list == .history ? "Chưa có lịch sử" : "Chưa có đánh dấu")
+                Text(list == .history ? L("Chưa có lịch sử", "No history yet") : L("Chưa có đánh dấu", "No bookmarks yet"))
                     .font(.headline).foregroundColor(.secondary)
                 Text(list == .history
-                     ? "Mỗi lần bấm ▶ để giả lập trên bản đồ, vị trí sẽ được ghi vào đây."
-                     : "Bấm ☆ trên bản đồ để lưu vị trí ghim,\nhoặc nhập từ file (nút ⋯).")
+                     ? L("Mỗi lần bấm ▶ để giả lập trên bản đồ, vị trí sẽ được ghi vào đây.", "Every time you tap ▶ on the map, the location is recorded here.")
+                     : L("Bấm ☆ trên bản đồ để lưu vị trí ghim,\nhoặc nhập từ file (nút ⋯).", "In History, press and hold a place → Add to Bookmarks,\nor import a file (⋯ button)."))
                     .font(.footnote).foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
             }
             .padding()
         } else if isSearching && filterAndSort(items, search: search, sort: sort).isEmpty {
-            Text("Không tìm thấy \"\(search)\"").foregroundColor(.secondary).padding()
+            Text(L("Không tìm thấy \"\(search)\"", "No results for \"\(search)\"")).foregroundColor(.secondary).padding()
         }
     }
 
@@ -376,6 +394,7 @@ struct LocationListView: View {
     private func reload() {
         items = loadList(list)
         folders = usesFolders ? loadFolders() : []
+        favFolders = usesFolders ? favouriteFolders() : []
         if let f = openFolder, !folders.contains(f) { openFolder = nil }
     }
 
@@ -401,7 +420,7 @@ struct LocationListView: View {
                        folders: edit.list == .bookmarks ? r.folders : nil)
         case .newBookmark:
             let added = addToBookmarks(name: r.name, lat: r.lat, long: r.long, folders: r.folders)
-            AlertKitAPI.present(title: added ? "Đã thêm vào Đánh dấu" : "Đã cập nhật trong Đánh dấu",
+            AlertKitAPI.present(title: added ? L("Đã thêm vào Đánh dấu", "Added to Bookmarks") : L("Đã cập nhật trong Đánh dấu", "Updated in Bookmarks"),
                                 icon: .done, style: .iOS17AppleMusic, haptic: .success)
         }
         reload()
@@ -418,36 +437,36 @@ struct LocationListView: View {
     }
 
     private func askDeleteFolder(_ folder: String) {
-        UIApplication.shared.confirmAlert(title: "Xoá danh sách \"\(folder)\"?",
-                                          body: "Các địa điểm bên trong vẫn được giữ lại và chuyển ra ngoài danh sách.",
+        UIApplication.shared.confirmAlert(title: L("Xoá danh sách \"\(folder)\"?", "Delete list \"\(folder)\"?"),
+                                          body: L("Các địa điểm bên trong vẫn được giữ lại và chuyển ra ngoài danh sách.", "The places inside are kept and moved out of the list."),
                                           onOK: { deleteFolder(folder); reload() }, noCancel: false)
     }
 
     private func copyText() {
         guard !items.isEmpty else {
-            showResult("Trống", "Chưa có vị trí nào để sao chép.")
+            showResult(L("Trống", "Empty"), L("Chưa có vị trí nào để sao chép.", "There is nothing to copy yet."))
             return
         }
         UIPasteboard.general.string = exportText(list, sorted(items))
-        showResult("Sao chép thành công", "Đã sao chép \(items.count) vị trí của \(list.title). Dán vào Zalo hoặc tin nhắn để gửi sang máy khác.")
+        showResult(L("Sao chép thành công", "Copied"), L("Đã sao chép \(items.count) vị trí của \(list.title). Dán vào Zalo hoặc tin nhắn để gửi sang máy khác.", "Copied \(items.count) places from \(list.title). Paste them into a message to send to another phone."))
     }
 
     private func share() {
         guard !items.isEmpty else {
-            showResult("Trống", "Chưa có vị trí nào để xuất.")
+            showResult(L("Trống", "Empty"), L("Chưa có vị trí nào để xuất.", "There is nothing to export yet."))
             return
         }
         guard let url = exportFile(list, sorted(items)) else {
-            showResult("Xuất file thất bại", "Không tạo được file.")
+            showResult(L("Xuất file thất bại", "Export failed"), L("Không tạo được file.", "Could not create the file."))
             return
         }
         let count = items.count
         let vc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
         vc.completionWithItemsHandler = { _, completed, _, error in
             if completed {
-                showResult("Xuất file thành công", "Đã xuất \(count) vị trí của \(list.title) (\(url.lastPathComponent)).")
+                showResult(L("Xuất file thành công", "Export complete"), L("Đã xuất \(count) vị trí của \(list.title) (\(url.lastPathComponent)).", "Exported \(count) places from \(list.title) (\(url.lastPathComponent))."))
             } else if let error {
-                showResult("Xuất file thất bại", error.localizedDescription)
+                showResult(L("Xuất file thất bại", "Export failed"), error.localizedDescription)
             }
         }
         presentTop(vc)
@@ -458,7 +477,7 @@ struct LocationListView: View {
         defer { if access { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url),
               let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16) else {
-            showResult("Nhập thất bại", "Không đọc được file.")
+            showResult(L("Nhập thất bại", "Import failed"), L("Không đọc được file.", "Could not read the file."))
             return
         }
         importText(text)
@@ -467,7 +486,7 @@ struct LocationListView: View {
     private func importText(_ text: String) {
         var found = parseText(text)
         guard !found.isEmpty else {
-            showResult("Nhập thất bại", "Không có vị trí nào đúng định dạng.")
+            showResult(L("Nhập thất bại", "Import failed"), L("Không có vị trí nào đúng định dạng.", "No locations in the right format."))
             return
         }
         // Importing while a list is open puts places without a list into it.
@@ -475,9 +494,10 @@ struct LocationListView: View {
             for i in found.indices where !found[i].folders.contains(f) { found[i].folders.append(f) }
         }
         let added = addItems(list, found)
+        if list == .bookmarks { parseFavouriteFolders(text).forEach { setFavouriteFolder($0, true) } }
         reload()
-        showResult(added > 0 ? "Nhập thành công" : "Không có vị trí mới",
-                   "Đã thêm \(added) vị trí vào \(list.title)" + (found.count > added ? ", bỏ qua \(found.count - added) vị trí trùng." : "."))
+        showResult(added > 0 ? L("Nhập thành công", "Import complete") : L("Không có vị trí mới", "No new locations"),
+                   L("Đã thêm \(added) vị trí vào \(list.title)", "Added \(added) places to \(list.title)") + (found.count > added ? L(", bỏ qua \(found.count - added) vị trí trùng.", ", skipped \(found.count - added) duplicates.") : "."))
     }
 }
 
@@ -505,13 +525,13 @@ struct FolderEditView: View {
         NavigationView {
             VStack(spacing: 0) {
                 VStack(spacing: 8) {
-                    TextField("Tên danh sách", text: $name)
+                    TextField(L("Tên danh sách", "List name"), text: $name)
                         .font(.body.weight(.semibold))
                         .padding(9)
                         .background(RoundedRectangle(cornerRadius: 9).fill(Color(.secondarySystemBackground)))
                     HStack(spacing: 6) {
                         Image(systemName: "magnifyingglass").foregroundColor(.secondary)
-                        TextField("Tìm địa điểm để thêm", text: $search).disableAutocorrection(true)
+                        TextField(L("Tìm địa điểm để thêm", "Search places to add"), text: $search).disableAutocorrection(true)
                         if !search.isEmpty {
                             Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundColor(.secondary) }
                         }
@@ -519,9 +539,9 @@ struct FolderEditView: View {
                     .padding(7)
                     .background(RoundedRectangle(cornerRadius: 9).fill(Color(.secondarySystemBackground)))
                     HStack {
-                        Text("Đã chọn \(picked.count)").font(.footnote).foregroundColor(.secondary)
+                        Text(L("Đã chọn \(picked.count)", "Selected \(picked.count)")).font(.footnote).foregroundColor(.secondary)
                         Spacer()
-                        Button(allShownPicked ? "Bỏ chọn tất cả" : "Chọn tất cả") {
+                        Button(allShownPicked ? L("Bỏ chọn tất cả", "Deselect all") : L("Chọn tất cả", "Select all")) {
                             if allShownPicked { shown.forEach { picked.remove($0.id) } }
                             else { shown.forEach { picked.insert($0.id) } }
                         }
@@ -560,16 +580,16 @@ struct FolderEditView: View {
                 .simultaneousGesture(DragGesture(minimumDistance: 12).onChanged { _ in hideKeyboard() })
                 .overlay(Group {
                     if items.isEmpty {
-                        Text("Chưa có địa điểm nào trong Đánh dấu.").foregroundColor(.secondary).padding()
+                        Text(L("Chưa có địa điểm nào trong Đánh dấu.", "There are no places in Bookmarks yet.")).foregroundColor(.secondary).padding()
                     }
                 })
             }
-            .navigationTitle(original == nil ? "Tạo danh sách" : "Sửa danh sách")
+            .navigationTitle(original == nil ? L("Tạo danh sách", "New list") : L("Sửa danh sách", "Edit list"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) { Button("Huỷ") { dismiss() } }
+                ToolbarItem(placement: .navigationBarLeading) { Button(L("Huỷ", "Cancel")) { dismiss() } }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Lưu") { save() }
+                    Button(L("Lưu", "Save")) { save() }
                         .font(.body.weight(.semibold))
                         .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
@@ -587,7 +607,7 @@ struct FolderEditView: View {
     private func save() {
         let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
         saveFolder(original: original, name: n, memberIDs: picked, keepOtherLists: true)
-        AlertKitAPI.present(title: original == nil ? "Đã tạo danh sách" : "Đã lưu danh sách",
+        AlertKitAPI.present(title: original == nil ? L("Đã tạo danh sách", "List created") : L("Đã lưu danh sách", "List saved"),
                             icon: .done, style: .iOS17AppleMusic, haptic: .success)
         dismiss()
         onSaved(n)
@@ -612,8 +632,8 @@ func textPrompt(title: String, placeholder: String, text: String, onSave: @escap
         f.clearButtonMode = .whileEditing
         f.autocapitalizationType = .sentences
     }
-    alert.addAction(UIAlertAction(title: "Huỷ", style: .cancel))
-    alert.addAction(UIAlertAction(title: "Lưu", style: .default) { _ in
+    alert.addAction(UIAlertAction(title: L("Huỷ", "Cancel"), style: .cancel))
+    alert.addAction(UIAlertAction(title: L("Lưu", "Save"), style: .default) { _ in
         let t = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !t.isEmpty { onSave(t) }
     })
@@ -643,12 +663,12 @@ struct PlaceEditView: View {
     var body: some View {
         NavigationView {
             Form {
-                Section("Tên") {
-                    TextField("Tên (để trống = Unnamed)", text: $name)
+                Section(L("Tên", "Name")) {
+                    TextField(L("Tên (để trống = Unnamed)", "Name (empty = Unnamed)"), text: $name)
                 }
-                Section("Toạ độ") {
-                    TextField("Vĩ độ (latitude)", text: $lat).keyboardType(.numbersAndPunctuation)
-                    TextField("Kinh độ (longitude)", text: $long).keyboardType(.numbersAndPunctuation)
+                Section(L("Toạ độ", "Coordinates")) {
+                    TextField(L("Vĩ độ (latitude)", "Latitude"), text: $lat).keyboardType(.numbersAndPunctuation)
+                    TextField(L("Kinh độ (longitude)", "Longitude"), text: $long).keyboardType(.numbersAndPunctuation)
                 }
                 if showsFolder {
                     Section {
@@ -664,19 +684,19 @@ struct PlaceEditView: View {
                                 }
                             }
                         }
-                        TextField("Tạo danh sách mới…", text: $newFolder)
+                        TextField(L("Tạo danh sách mới…", "Create a new list…"), text: $newFolder)
                     } header: {
-                        Text("Danh sách")
+                        Text(L("Danh sách", "Lists"))
                     } footer: {
-                        Text("Tích các danh sách muốn đưa vị trí vào. Gõ tên mới để tạo thêm danh sách.")
+                        Text(L("Tích các danh sách muốn đưa vị trí vào. Gõ tên mới để tạo thêm danh sách.", "Tick the lists for this place. Type a name to create a new list."))
                     }
                 }
             }
-            .navigationTitle(edit.mode == .newBookmark ? "Lưu vào Đánh dấu" : "Sửa vị trí")
+            .navigationTitle(edit.mode == .newBookmark ? L("Lưu vào Đánh dấu", "Save to Bookmarks") : L("Sửa vị trí", "Edit location"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) { Button("Huỷ") { dismiss() } }
-                ToolbarItem(placement: .navigationBarTrailing) { Button("Lưu") { save() }.font(.body.weight(.semibold)) }
+                ToolbarItem(placement: .navigationBarLeading) { Button(L("Huỷ", "Cancel")) { dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) { Button(L("Lưu", "Save")) { save() }.font(.body.weight(.semibold)) }
             }
             .onAppear {
                 guard !didLoad else { return }
@@ -693,7 +713,7 @@ struct PlaceEditView: View {
     private func save() {
         let num: (String) -> Double? = { Double($0.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)) }
         guard let la = num(lat), let lo = num(long), (-90...90).contains(la), (-180...180).contains(lo) else {
-            UIApplication.shared.alert(body: "Toạ độ không hợp lệ.")
+            UIApplication.shared.alert(body: L("Toạ độ không hợp lệ.", "Invalid coordinates."))
             return
         }
         var lists = folders.filter { chosen.contains($0) } + chosen.filter { !folders.contains($0) }.sorted()
@@ -714,7 +734,7 @@ struct PasteImportView: View {
     var body: some View {
         NavigationView {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Dán nội dung đã xuất (mỗi dòng: Tên | Vĩ độ, Kinh độ). Vị trí sẽ được nhập vào \(title).")
+                Text(L("Dán nội dung đã xuất (mỗi dòng: Tên | Vĩ độ, Kinh độ). Vị trí sẽ được nhập vào \(title).", "Paste exported text (one per line: Name | Latitude, Longitude). Places will be imported into \(title)."))
                     .font(.footnote)
                     .foregroundColor(.secondary)
                 TextEditor(text: $text)
@@ -724,18 +744,18 @@ struct PasteImportView: View {
                 Button {
                     text = UIPasteboard.general.string ?? ""
                 } label: {
-                    Label("Dán từ bộ nhớ tạm", systemImage: "doc.on.clipboard")
+                    Label(L("Dán từ bộ nhớ tạm", "Paste from clipboard"), systemImage: "doc.on.clipboard")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
             }
             .padding()
-            .navigationTitle("Dán văn bản")
+            .navigationTitle(L("Dán văn bản", "Paste text"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) { Button("Huỷ") { dismiss() } }
+                ToolbarItem(placement: .navigationBarLeading) { Button(L("Huỷ", "Cancel")) { dismiss() } }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Nhập") {
+                    Button(L("Nhập", "Import")) {
                         let t = text
                         dismiss()
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { onImport(t) }
