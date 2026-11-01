@@ -186,24 +186,30 @@ struct LocSimView: View {
                         AlertKitAPI.present(title: "Đã sao chép toạ độ", icon: .done, style: .iOS17AppleMusic, haptic: .success)
                     }
                 HStack(alignment: .bottom) {
-                    // Play (blue) -> while faking becomes Stop (red, square in the middle)
-                    Button(action: { isFaking ? stop() : startAtPin() }) {
-                        ZStack {
-                            Circle().fill(isFaking ? Color(red: 0.96, green: 0.26, blue: 0.21)
-                                                   : Color(red: 0.13, green: 0.59, blue: 0.95))
-                            if isFaking {
-                                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                    .fill(Color.white)
-                                    .frame(width: 21, height: 21)
-                            } else {
+                    // Play (always available, re-play moves to the new pin) + Stop (grey → red while simulating)
+                    HStack(spacing: 14) {
+                        Button(action: startAtPin) {
+                            ZStack {
+                                Circle().fill(Color(red: 0.13, green: 0.59, blue: 0.95))
                                 PlayTriangle()
                                     .fill(Color.white)
                                     .frame(width: 24, height: 27)
                             }
+                            .frame(width: 58, height: 58)
+                            .shadow(color: .black.opacity(0.22), radius: 6, y: 3)
                         }
-                        .frame(width: 58, height: 58)
-                        .shadow(color: .black.opacity(0.22), radius: 6, y: 3)
-                        .animation(.easeInOut(duration: 0.2), value: isFaking)
+                        Button(action: stop) {
+                            ZStack {
+                                Circle().fill(isFaking ? Color(red: 0.96, green: 0.26, blue: 0.21) : Color(.systemGray3))
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(Color.white)
+                                    .frame(width: 20, height: 20)
+                            }
+                            .frame(width: 58, height: 58)
+                            .shadow(color: .black.opacity(isFaking ? 0.22 : 0.1), radius: 6, y: 3)
+                            .animation(.easeInOut(duration: 0.2), value: isFaking)
+                        }
+                        .disabled(!isFaking)
                     }
                     Spacer()
                     VStack(spacing: 10) {
