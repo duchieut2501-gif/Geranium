@@ -249,17 +249,3 @@ func parseText(_ text: String) -> [Bookmark] {
     }
     return result
 }
-
-// MARK: - Mika's LocSim import
-
-private let mikaPlist = "/var/mobile/Library/Preferences/com.mika.LocationSimulation.plist"
-
-func mikaLocations() -> [Bookmark] {
-    guard let data = try? Data(contentsOf: URL(fileURLWithPath: mikaPlist)),
-          let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
-          let datas = plist["datas"] as? [[String: Any]] else { return [] }
-    return datas.compactMap { d in
-        guard let la = (d["la"] as? NSNumber)?.doubleValue, let lo = (d["lo"] as? NSNumber)?.doubleValue else { return nil }
-        return Bookmark(name: d["remark"] as? String ?? "", lat: la, long: lo, date: 0)
-    }
-}

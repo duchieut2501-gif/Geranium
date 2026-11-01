@@ -96,7 +96,6 @@ struct LocationListView: View {
             Menu {
                 Button { share() } label: { Label("Xuất file (.txt)", systemImage: "square.and.arrow.up") }
                 Button { showImporter = true } label: { Label("Nhập từ file", systemImage: "square.and.arrow.down") }
-                Button { importMika() } label: { Label("Nhập từ LocSim", systemImage: "arrow.down.doc") }
             } label: {
                 Image(systemName: "ellipsis.circle").font(.title3)
             }
@@ -146,7 +145,7 @@ struct LocationListView: View {
                     .font(.title3).foregroundColor(.secondary)
                 Text(list == .history
                      ? "Mỗi lần bấm ▶ trên bản đồ, vị trí sẽ được ghi vào đây."
-                     : "Chạm vào một vị trí trong Lịch sử → Thêm vào Đánh dấu,\nhoặc nhập từ file / LocSim (nút ⋯).")
+                     : "Chạm vào một vị trí trong Lịch sử → Thêm vào Đánh dấu,\nhoặc nhập từ file (nút ⋯).")
                     .font(.footnote).foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
             }
@@ -229,18 +228,6 @@ struct LocationListView: View {
         reload()
         UIApplication.shared.alert(title: "Đã nhập vào \(list.title)",
                                    body: "Thêm \(added) vị trí" + (found.count > added ? ", bỏ qua \(found.count - added) vị trí trùng." : "."))
-    }
-
-    private func importMika() {
-        let found = mikaLocations()
-        guard !found.isEmpty else {
-            UIApplication.shared.alert(title: "Không tìm thấy", body: "Không có vị trí đã lưu nào của LocSim trên máy này.")
-            return
-        }
-        let added = addItems(list, found)
-        reload()
-        UIApplication.shared.alert(title: "Đã nhập từ LocSim",
-                                   body: "Thêm \(added) vị trí vào \(list.title)" + (found.count > added ? ", bỏ qua \(found.count - added) vị trí trùng." : "."))
     }
 }
 

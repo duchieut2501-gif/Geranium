@@ -12,6 +12,20 @@ import AlertKit
 import PhotosUI
 import UIKit
 
+/// Play triangle whose visual centre (centroid) sits exactly in the middle of its frame.
+struct PlayTriangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        let w = rect.width, h = rect.height
+        let shift = w / 6                       // centroid is 1/3 from the flat side
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX + shift, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.minX + shift + w, y: rect.midY))
+        p.addLine(to: CGPoint(x: rect.minX + shift, y: rect.maxY))
+        p.closeSubpath()
+        return p
+    }
+}
+
 enum MainTab: String, CaseIterable, Identifiable {
     case map, history, bookmarks
     var id: String { rawValue }
@@ -109,17 +123,16 @@ struct LocSimView: View {
                         AlertKitAPI.present(title: "Đã sao chép toạ độ", icon: .done, style: .iOS17AppleMusic, haptic: .success)
                     }
                 HStack(alignment: .bottom) {
-                    // Start: round red "play" button
+                    // Start: round blue "play" button, triangle centred
                     Button(action: startAtPin) {
                         ZStack {
-                            Circle().fill(Color(red: 1, green: 0, blue: 0))
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 28, weight: .bold))
-                                .foregroundColor(.white)
-                                .offset(x: 3)
+                            Circle().fill(Color(red: 0.13, green: 0.59, blue: 0.95))
+                            PlayTriangle()
+                                .fill(Color.white)
+                                .frame(width: 30, height: 34)
                         }
-                        .frame(width: 68, height: 68)
-                        .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
+                        .frame(width: 72, height: 72)
+                        .shadow(color: .black.opacity(0.22), radius: 6, y: 3)
                     }
                     Spacer()
                     // Go to my real location
@@ -224,6 +237,27 @@ enum AppCustomizer {
         set { UserDefaults.standard.set(newValue, forKey: "iconChoice") }
     }
 
+    /// Changes saved but not visible until a respring.
+    static var pendingRespring: Bool {
+        get { UserDefaults.standard.bool(forKey: "pendingRespring") }
+        set { UserDefaults.standard.set(newValue, forKey: "pendingRespring") }
+    }
+
+    static func respringNow() {
+        pendingRespring = false
+        DispatchQueue.global().async { _ = RootHelper.rebuildIconCache() }
+    }
+
+    /// "Respring now / Later" question.
+    static func askRespring(onLater: (() -> Void)? = nil) {
+        let alert = UIAlertController(title: "Cần respring để áp dụng",
+                                      message: "Đã lưu thay đổi. Màn hình chính cần khởi động lại (respring) thì tên / biểu tượng mới hiện ra.",
+                                      preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Để sau", style: .cancel) { _ in onLater?() })
+        alert.addAction(UIAlertAction(title: "Respring ngay", style: .default) { _ in respringNow() })
+        presentTop(alert)
+    }
+
     static var bundleURL: URL { Bundle.main.bundleURL }
     static var infoURL: URL { bundleURL.appendingPathComponent("Info.plist") }
     private static var docs: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
@@ -274,10 +308,8 @@ enum AppCustomizer {
         let work = {
             do {
                 try applyNow(displayName: displayName, photoIcon: photoIcon)
+                pendingRespring = true
                 completion(nil)
-                DispatchQueue.global().asyncAfter(deadline: .now() + 0.8) {
-                    _ = RootHelper.rebuildIconCache()   // refresh home screen (respring)
-                }
             } catch {
                 completion(error)
             }
@@ -349,8 +381,8 @@ enum AppCustomizer {
             _ = RootHelper.copy(from: tmp, to: infoURL)
             guard FileManager.default.fileExists(atPath: infoURL.path) else { throw Failure.rootWrite }
             storedChoice = AppIconChoice.d.rawValue
+            pendingRespring = true
             completion(nil)
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.8) { _ = RootHelper.rebuildIconCache() }
         } catch {
             completion(error)
         }
@@ -400,6 +432,7 @@ struct CustomizeAppView: View {
     @State private var showPicker = false
     @State private var showCrop = false
     @State private var busy = false
+    @State private var pending = AppCustomizer.pendingRespring
 
     private var nameChanged: Bool {
         let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -409,6 +442,17 @@ struct CustomizeAppView: View {
     var body: some View {
         NavigationView {
             Form {
+                if pending {
+                    Section {
+                        Button {
+                            AppCustomizer.respringNow()
+                        } label: {
+                            Label("Respring ngay để áp dụng", systemImage: "arrow.clockwise")
+                        }
+                    } footer: {
+                        Text("Có thay đổi tên / biểu tượng chưa áp dụng. Bấm để respring, hoặc để sau: thay đổi sẽ hiện ra lần respring hoặc khởi động lại máy tiếp theo.")
+                    }
+                }
                 Section {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
                         ForEach([AppIconChoice.d, .e, .f]) { option in
@@ -452,7 +496,7 @@ struct CustomizeAppView: View {
                     }
                     .disabled(busy || (!nameChanged && croppedIcon == nil))
                 } footer: {
-                    Text("Đổi tên hoặc dùng ảnh riêng sẽ làm màn hình chính khởi động lại vài giây (respring).")
+                    Text("Đổi tên hoặc dùng ảnh riêng cần respring mới hiện ra. App sẽ hỏi bạn respring ngay hay để sau.")
                 }
 
                 Section {
@@ -485,6 +529,7 @@ struct CustomizeAppView: View {
                                                           onOK: {
                             AppCustomizer.resetToDefault { error in
                                 if let error { UIApplication.shared.alert(body: error.localizedDescription) }
+                                else if AppCustomizer.pendingRespring { pending = true; AppCustomizer.askRespring() }
                             }
                         }, noCancel: false)
                     }
@@ -537,7 +582,8 @@ struct CustomizeAppView: View {
                 if let error {
                     UIApplication.shared.alert(body: error.localizedDescription)
                 } else {
-                    AlertKitAPI.present(title: "Đã áp dụng", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+                    pending = true
+                    AppCustomizer.askRespring()
                 }
             }
         }
