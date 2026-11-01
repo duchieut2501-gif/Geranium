@@ -48,6 +48,9 @@ struct LocationListView: View {
             .overlay(emptyState, alignment: .center)
         }
         .onAppear { reload() }
+        .onReceive(NotificationCenter.default.publisher(for: .locListChanged)) { note in
+            if (note.object as? String) == list.rawValue { reload() }
+        }
         .confirmationDialog(selected?.displayName ?? "", isPresented: $showMenu, titleVisibility: .visible) {
             if let item = selected {
                 Button("Bắt đầu fake vị trí này") { onStart(item); reload() }
@@ -55,9 +58,13 @@ struct LocationListView: View {
                 Button("Sửa vị trí") { edit(item) }
                 if list == .history {
                     Button("Thêm vào Đánh dấu") {
-                        let ok = addToBookmarks(item)
-                        AlertKitAPI.present(title: ok ? "Đã đánh dấu" : "Đã có trong Đánh dấu",
-                                            icon: .done, style: .iOS17AppleMusic, haptic: .success)
+                        let picked = item
+                        DispatchQueue.main.async {
+                            let ok = addToBookmarks(picked)
+                            let count = loadList(.bookmarks).count
+                            AlertKitAPI.present(title: ok ? "Đã thêm vào Đánh dấu (\(count))" : "Đã có trong Đánh dấu",
+                                                icon: .done, style: .iOS17AppleMusic, haptic: .success)
+                        }
                     }
                 }
                 Button("Xoá", role: .destructive) { remove(item) }

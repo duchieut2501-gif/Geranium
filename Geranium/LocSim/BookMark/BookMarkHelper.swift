@@ -62,9 +62,14 @@ func loadList(_ list: LocList) -> [Bookmark] {
     return items
 }
 
+extension Notification.Name {
+    static let locListChanged = Notification.Name("locListChanged")
+}
+
 func saveList(_ list: LocList, _ items: [Bookmark]) {
     store?.set(items.map { $0.dict }, forKey: list.key)
     store?.synchronize()
+    NotificationCenter.default.post(name: .locListChanged, object: list.rawValue)
 }
 
 /// v2: everything auto-saved before (date > 0) moves to History; imported/old entries stay in Bookmarks.
@@ -160,23 +165,53 @@ enum BookmarkSort: String, CaseIterable, Identifiable {
     }
 }
 
+/// Words of a name, accent-free: "Bệnh Viện Bạch Mai - Cổng 1" -> ["benh","vien","bach","mai","cong","1"]
+private func words(_ text: String) -> [String] {
+    foldForSearch(text).components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+}
+
+/// Relevance: 0 = name starts with the query, 1 = every query word starts a word in the name
+/// (in order), 2 = every query word starts some word. nil = not a match.
+/// Only the START of words counts: "nhi" finds "Nhi TW", not "Bệnh viện".
+private func relevance(_ item: Bookmark, queryWords: [String], queryText: String, search: String) -> Int? {
+    let nameWords = words(item.displayName)
+    let joined = nameWords.joined(separator: " ")
+    if joined.hasPrefix(queryText) { return 0 }
+    // in-order word prefixes
+    var i = 0
+    for w in nameWords where i < queryWords.count && w.hasPrefix(queryWords[i]) { i += 1 }
+    if i == queryWords.count { return 1 }
+    if queryWords.allSatisfy({ q in nameWords.contains { $0.hasPrefix(q) } }) { return 2 }
+    // coordinates typed as numbers
+    // coordinates, only when a decimal number is typed (e.g. "21.02"), so "2" still means "Cổng 2"
+    if search.contains("."),
+       String(format: "%.6f, %.6f", item.lat, item.long).hasPrefix(search.trimmingCharacters(in: .whitespaces)) { return 3 }
+    return nil
+}
+
 func filterAndSort(_ items: [Bookmark], search: String, sort: BookmarkSort) -> [Bookmark] {
-    let q = foldForSearch(search.trimmingCharacters(in: .whitespacesAndNewlines))
-    let filtered = q.isEmpty ? items : items.filter {
-        foldForSearch($0.displayName).contains(q) || String(format: "%.6f, %.6f", $0.lat, $0.long).contains(q)
-    }
-    switch sort {
-    case .az, .za:
-        return filtered.sorted { a, b in
+    func baseOrder(_ a: Bookmark, _ b: Bookmark) -> Bool {
+        switch sort {
+        case .az, .za:
             if a.isUnnamed != b.isUnnamed { return !a.isUnnamed }   // Unnamed at the bottom
             if a.isUnnamed { return a.date > b.date }
             let r = a.name.compare(b.name, options: [.caseInsensitive, .numeric], range: nil, locale: vietnameseLocale)
             if r == .orderedSame { return a.date > b.date }
             return sort == .az ? r == .orderedAscending : r == .orderedDescending
+        case .newest: return a.date > b.date
+        case .oldest: return a.date < b.date
         }
-    case .newest: return filtered.sorted { $0.date > $1.date }
-    case .oldest: return filtered.sorted { $0.date < $1.date }
     }
+
+    let queryWords = words(search)
+    guard !queryWords.isEmpty else { return items.sorted(by: baseOrder) }
+    let queryText = queryWords.joined(separator: " ")
+
+    // Most relevant first, then the chosen order inside each group.
+    return items
+        .compactMap { item in relevance(item, queryWords: queryWords, queryText: queryText, search: search).map { (item, $0) } }
+        .sorted { $0.1 != $1.1 ? $0.1 < $1.1 : baseOrder($0.0, $1.0) }
+        .map { $0.0 }
 }
 
 // MARK: - Text export / import
