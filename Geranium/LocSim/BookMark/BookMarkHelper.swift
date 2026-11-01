@@ -92,6 +92,11 @@ private func isNear(_ a: Bookmark, _ lat: Double, _ long: Double, _ meters: CLLo
 
 /// Every fake is logged in History. A location within 5 m is moved to the top instead of duplicated.
 func logToHistory(lat: Double, long: Double, name: String = "") {
+    // A saved (bookmarked) place keeps its name in History.
+    var name = name
+    if name.isEmpty, let saved = loadList(.bookmarks).first(where: { isNear($0, lat, long) && !$0.isUnnamed }) {
+        name = saved.name
+    }
     var items = loadList(.history)
     let now = Date().timeIntervalSince1970
     if let i = items.firstIndex(where: { isNear($0, lat, long) }) {
