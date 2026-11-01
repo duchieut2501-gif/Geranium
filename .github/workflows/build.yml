@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-14
@@ -41,3 +44,13 @@ jobs:
           name: LocSim-tipa
           path: build/Geranium.tipa
           if-no-files-found: error
+
+      - name: Publish release (direct download link)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete build -y --cleanup-tag -R "$GITHUB_REPOSITORY" || true
+          gh release create build build/Geranium.tipa -R "$GITHUB_REPOSITORY" \
+            --title "Location Simulator (bản mới nhất)" \
+            --notes "Bản build lúc $(TZ=Asia/Ho_Chi_Minh date '+%H:%M %d/%m/%Y'). Mở file Geranium.tipa bằng TrollStore." \
+            --target "$GITHUB_SHA" --latest
