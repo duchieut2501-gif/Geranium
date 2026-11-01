@@ -486,7 +486,6 @@ struct FolderEditView: View {
     @State private var picked: Set<String> = []
     @State private var search = ""
     @State private var didLoad = false
-    @State private var keepOtherLists = false
 
     private var shown: [Bookmark] { filterAndSort(items, search: search, sort: .az) }
     private var allShownPicked: Bool { !shown.isEmpty && shown.allSatisfy { picked.contains($0.id) } }
@@ -508,14 +507,6 @@ struct FolderEditView: View {
                     }
                     .padding(7)
                     .background(RoundedRectangle(cornerRadius: 9).fill(Color(.secondarySystemBackground)))
-                    Toggle(isOn: $keepOtherLists) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Giữ cả ở danh sách khác").font(.subheadline)
-                            Text(keepOtherLists ? "Điểm tích thêm vẫn nằm trong danh sách cũ của nó."
-                                                : "Điểm tích thêm sẽ được chuyển hẳn sang danh sách này.")
-                                .font(.caption).foregroundColor(.secondary)
-                        }
-                    }
                     HStack {
                         Text("Đã chọn \(picked.count)").font(.footnote).foregroundColor(.secondary)
                         Spacer()
@@ -584,7 +575,7 @@ struct FolderEditView: View {
 
     private func save() {
         let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        saveFolder(original: original, name: n, memberIDs: picked, keepOtherLists: keepOtherLists)
+        saveFolder(original: original, name: n, memberIDs: picked, keepOtherLists: true)
         AlertKitAPI.present(title: original == nil ? "Đã tạo danh sách" : "Đã lưu danh sách",
                             icon: .done, style: .iOS17AppleMusic, haptic: .success)
         dismiss()
@@ -633,7 +624,6 @@ struct PlaceEditView: View {
     @State private var lat = ""
     @State private var long = ""
     @State private var chosen: Set<String> = []
-    @State private var multi = false
     @State private var newFolder = ""
     @State private var didLoad = false
 
@@ -651,15 +641,9 @@ struct PlaceEditView: View {
                 }
                 if showsFolder {
                     Section {
-                        Toggle("Cho vào nhiều danh sách", isOn: $multi)
-                            .onChange(of: multi) { on in
-                                if !on, chosen.count > 1, let first = folders.first(where: { chosen.contains($0) }) { chosen = [first] }
-                            }
                         ForEach(folders, id: \.self) { f in
                             Button {
-                                if chosen.contains(f) { chosen.remove(f) }
-                                else if multi { chosen.insert(f) }
-                                else { chosen = [f] }          // one list only unless the switch is on
+                                if chosen.contains(f) { chosen.remove(f) } else { chosen.insert(f) }
                             } label: {
                                 HStack {
                                     Image(systemName: chosen.contains(f) ? "checkmark.circle.fill" : "circle")
@@ -673,8 +657,7 @@ struct PlaceEditView: View {
                     } header: {
                         Text("Danh sách")
                     } footer: {
-                        Text(multi ? "Tích các danh sách muốn đưa vị trí vào. Gõ tên mới để tạo thêm danh sách."
-                                   : "Chọn một danh sách. Bật \"Cho vào nhiều danh sách\" nếu muốn vị trí nằm ở nhiều nơi.")
+                        Text("Tích các danh sách muốn đưa vị trí vào. Gõ tên mới để tạo thêm danh sách.")
                     }
                 }
             }
@@ -690,7 +673,7 @@ struct PlaceEditView: View {
                 name = edit.item.name
                 lat = String(format: "%.7f", edit.item.lat)
                 long = String(format: "%.7f", edit.item.long)
-                if edit.mode == .edit { chosen = Set(edit.item.folders); multi = edit.item.folders.count > 1 }
+                if edit.mode == .edit { chosen = Set(edit.item.folders) }
                 else if !defaultFolder.isEmpty { chosen = [defaultFolder] }
             }
         }
@@ -704,7 +687,7 @@ struct PlaceEditView: View {
         }
         var lists = folders.filter { chosen.contains($0) } + chosen.filter { !folders.contains($0) }.sorted()
         let nf = newFolder.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !nf.isEmpty { lists = multi ? lists + [nf] : [nf] }
+        if !nf.isEmpty { lists.append(nf) }
         onSave(Result(name: name, lat: la, long: lo, folders: cleanLists(lists)))
         dismiss()
     }
