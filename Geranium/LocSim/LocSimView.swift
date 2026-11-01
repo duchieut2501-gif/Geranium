@@ -77,6 +77,7 @@ struct LocSimView: View {
     /// "lat,long" of the place being simulated ("" = none). Lists use it to mark that row red.
     @AppStorage("activeLoc") private var activeLoc: String = ""
     @AppStorage("appLanguage") private var appLanguage: String = "en"
+    @AppStorage("mapType") private var mapType: String = "standard"
 
     var body: some View {
         NavigationView {
@@ -165,7 +166,8 @@ struct LocSimView: View {
                           recenterTick: recenterTick,
                           focusCoordinate: focusCoordinate,
                           zoomRequest: zoomRequest,
-                          onZoomChanged: { zoomLevel = $0 })
+                          onZoomChanged: { zoomLevel = $0 },
+                          mapType: mapType)
                 .ignoresSafeArea(edges: .bottom)
 
             CenterPin()
@@ -583,6 +585,7 @@ struct CustomizeAppView: View {
     @AppStorage("locAltitude") private var altitude: String = "0"
     @AppStorage("textSize") private var textSize: String = TextSizeOption.small.rawValue
     @AppStorage("appLanguage") private var appLanguage: String = "en"
+    @AppStorage("mapType") private var mapType: String = "standard"
     @State private var manualLat = ""
     @State private var manualLong = ""
     @State private var choice = AppIconChoice(rawValue: AppCustomizer.storedChoice) ?? .e
@@ -668,6 +671,19 @@ struct CustomizeAppView: View {
                     .pickerStyle(.segmented)
                 } header: {
                     Text(L("Ngôn ngữ / Language", "Language / Ngôn ngữ"))
+                }
+
+                Section {
+                    Picker(L("Kiểu bản đồ", "Map type"), selection: $mapType) {
+                        Text(L("Thường", "Standard")).tag("standard")
+                        Text(L("Vệ tinh", "Satellite")).tag("satellite")
+                        Text(L("Lai", "Hybrid")).tag("hybrid")
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text(L("Bản đồ (Apple Maps)", "Map (Apple Maps)"))
+                } footer: {
+                    Text(L("Lai = ảnh vệ tinh có tên đường.", "Hybrid = satellite imagery with street names."))
                 }
 
                 Section {

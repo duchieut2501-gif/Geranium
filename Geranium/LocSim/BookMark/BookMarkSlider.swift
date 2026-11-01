@@ -33,7 +33,8 @@ struct LocationListView: View {
     @AppStorage("sort_history") private var sortHistory: String = BookmarkSort.newest.rawValue
     @AppStorage("sort_bookmarks") private var sortBookmarks: String = BookmarkSort.az.rawValue
     @AppStorage("bmViewMode") private var viewModeRaw: String = BookmarkViewMode.all.rawValue
-    @AppStorage("collapsedFolders") private var collapsedRaw: String = ""
+    /// Lists the user closed during this visit. Empty = everything open (default every time).
+    @State private var collapsed: Set<String> = []
     @AppStorage("activeLoc") private var activeLoc: String = ""
     @State private var openFolder: String? = nil
     @State private var selected: Bookmark? = nil
@@ -47,7 +48,6 @@ struct LocationListView: View {
     private var sortRaw: Binding<String> { list == .history ? $sortHistory : $sortBookmarks }
     private var sort: BookmarkSort { BookmarkSort(rawValue: sortRaw.wrappedValue) ?? .az }
     private var viewMode: BookmarkViewMode { BookmarkViewMode(rawValue: viewModeRaw) ?? .all }
-    private var collapsed: Set<String> { Set(collapsedRaw.split(separator: "\n").map(String.init)) }
     private var isSearching: Bool { !search.trimmingCharacters(in: .whitespaces).isEmpty }
     private var usesFolders: Bool { list == .bookmarks }
 
@@ -378,7 +378,7 @@ struct LocationListView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .onChange(of: viewModeRaw) { _ in openFolder = nil }
+        .onChange(of: viewModeRaw) { _ in openFolder = nil; collapsed = [] }   // "show all" always opens every list
     }
 
     @ViewBuilder
@@ -409,9 +409,7 @@ struct LocationListView: View {
     }
 
     private func toggle(_ folder: String) {
-        var c = collapsed
-        if c.contains(folder) { c.remove(folder) } else { c.insert(folder) }
-        collapsedRaw = c.sorted().joined(separator: "\n")
+        if collapsed.contains(folder) { collapsed.remove(folder) } else { collapsed.insert(folder) }
     }
 
     private func remove(_ item: Bookmark) {

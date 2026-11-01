@@ -20,6 +20,8 @@ struct CustomMapView: UIViewRepresentable {
     var zoomRequest: ZoomRequest? = nil
     /// Reports the zoom level (0 far … 1 close) after the map moves.
     var onZoomChanged: ((Double) -> Void)? = nil
+    /// "standard", "satellite" or "hybrid" (Settings).
+    var mapType: String = "standard"
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
@@ -34,6 +36,8 @@ struct CustomMapView: UIViewRepresentable {
 
     func updateUIView(_ mapView: MKMapView, context: Context) {
         let c = context.coordinator
+        let wanted: MKMapType = mapType == "satellite" ? .satellite : (mapType == "hybrid" ? .hybrid : .standard)
+        if mapView.mapType != wanted { mapView.mapType = wanted }
         if recenterTick != c.lastRecenterTick {
             c.lastRecenterTick = recenterTick
             if let loc = mapView.userLocation.location?.coordinate, CLLocationCoordinate2DIsValid(loc) {
