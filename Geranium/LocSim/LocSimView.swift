@@ -292,7 +292,7 @@ struct LocSimView: View {
 
 
 enum AppIconChoice: String, CaseIterable, Identifiable {
-    case e, i, d, h, g, custom          // display order: E, I, D, H, G
+    case e, i, dColor, eColor, d, h, g, custom   // display order
     var id: String { rawValue }
 
     /// Alternate icon name in Info.plist (files Icons/<name>.png).
@@ -300,6 +300,8 @@ enum AppIconChoice: String, CaseIterable, Identifiable {
         switch self {
         case .e: return "Flore"
         case .i: return "Beta"
+        case .dColor: return "PinsColor"
+        case .eColor: return "MapColor"
         case .d: return "Bouquet"
         case .h: return "Pin"
         case .g: return "Outline"
@@ -311,6 +313,8 @@ enum AppIconChoice: String, CaseIterable, Identifiable {
         switch self {
         case .e: return "Bản đồ"
         case .i: return "Vòng ngắm"
+        case .dColor: return "Ghim đôi màu"
+        case .eColor: return "Bản đồ màu"
         case .d: return "Ghim đôi"
         case .h: return "Ghim đặc"
         case .g: return "Ghim nét"
@@ -322,7 +326,7 @@ enum AppIconChoice: String, CaseIterable, Identifiable {
         alternateName.flatMap { UIImage(named: $0) }
     }
 
-    static var builtIn: [AppIconChoice] { [.e, .i, .d, .h, .g] }
+    static var builtIn: [AppIconChoice] { [.e, .i, .dColor, .eColor, .d, .h, .g] }
 }
 
 enum AppCustomizer {
@@ -549,7 +553,7 @@ struct CustomizeAppView: View {
                     }
                 }
                 Section {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 14) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
                         ForEach(AppIconChoice.builtIn) { option in
                             iconTile(image: option.preview, title: option.title, selected: choice == option && croppedIcon == nil) {
                                 croppedIcon = nil
@@ -567,7 +571,7 @@ struct CustomizeAppView: View {
                 } header: {
                     Text("Biểu tượng")
                 } footer: {
-                    Text("5 mẫu có sẵn đổi ngay. \"Ảnh của bạn\": chọn ảnh, cắt cho vừa khung rồi bấm Áp dụng ở dưới.")
+                    Text("7 mẫu có sẵn đổi ngay. \"Ảnh của bạn\": chọn ảnh, cắt cho vừa khung rồi bấm Áp dụng ở dưới.")
                 }
 
                 Section {
