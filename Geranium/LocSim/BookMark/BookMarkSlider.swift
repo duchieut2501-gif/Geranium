@@ -414,23 +414,32 @@ struct LocationListView: View {
 
     private func copyText() {
         guard !items.isEmpty else {
-            UIApplication.shared.alert(title: "Trống", body: "Chưa có vị trí nào để sao chép.")
+            showResult("Trống", "Chưa có vị trí nào để sao chép.")
             return
         }
         UIPasteboard.general.string = exportText(list, sorted(items))
-        AlertKitAPI.present(title: "Đã sao chép \(items.count) vị trí", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        showResult("Sao chép thành công", "Đã sao chép \(items.count) vị trí của \(list.title). Dán vào Zalo hoặc tin nhắn để gửi sang máy khác.")
     }
 
     private func share() {
         guard !items.isEmpty else {
-            UIApplication.shared.alert(title: "Trống", body: "Chưa có vị trí nào để xuất.")
+            showResult("Trống", "Chưa có vị trí nào để xuất.")
             return
         }
         guard let url = exportFile(list, sorted(items)) else {
-            UIApplication.shared.alert(body: "Không tạo được file.")
+            showResult("Xuất file thất bại", "Không tạo được file.")
             return
         }
-        presentTop(UIActivityViewController(activityItems: [url], applicationActivities: nil))
+        let count = items.count
+        let vc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        vc.completionWithItemsHandler = { _, completed, _, error in
+            if completed {
+                showResult("Xuất file thành công", "Đã xuất \(count) vị trí của \(list.title) (\(url.lastPathComponent)).")
+            } else if let error {
+                showResult("Xuất file thất bại", error.localizedDescription)
+            }
+        }
+        presentTop(vc)
     }
 
     private func importFile(_ url: URL) {
@@ -438,7 +447,7 @@ struct LocationListView: View {
         defer { if access { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url),
               let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16) else {
-            UIApplication.shared.alert(body: "Không đọc được file.")
+            showResult("Nhập thất bại", "Không đọc được file.")
             return
         }
         importText(text)
@@ -447,7 +456,7 @@ struct LocationListView: View {
     private func importText(_ text: String) {
         var found = parseText(text)
         guard !found.isEmpty else {
-            UIApplication.shared.alert(body: "Không có vị trí nào đúng định dạng.")
+            showResult("Nhập thất bại", "Không có vị trí nào đúng định dạng.")
             return
         }
         // Importing while a list is open puts places without a list into it.
@@ -456,8 +465,8 @@ struct LocationListView: View {
         }
         let added = addItems(list, found)
         reload()
-        UIApplication.shared.alert(title: "Đã nhập vào \(list.title)",
-                                   body: "Thêm \(added) vị trí" + (found.count > added ? ", bỏ qua \(found.count - added) vị trí trùng." : "."))
+        showResult(added > 0 ? "Nhập thành công" : "Không có vị trí mới",
+                   "Đã thêm \(added) vị trí vào \(list.title)" + (found.count > added ? ", bỏ qua \(found.count - added) vị trí trùng." : "."))
     }
 }
 
@@ -477,6 +486,7 @@ struct FolderEditView: View {
     @State private var picked: Set<String> = []
     @State private var search = ""
     @State private var didLoad = false
+    @State private var keepOtherLists = false
 
     private var shown: [Bookmark] { filterAndSort(items, search: search, sort: .az) }
     private var allShownPicked: Bool { !shown.isEmpty && shown.allSatisfy { picked.contains($0.id) } }
@@ -498,6 +508,14 @@ struct FolderEditView: View {
                     }
                     .padding(7)
                     .background(RoundedRectangle(cornerRadius: 9).fill(Color(.secondarySystemBackground)))
+                    Toggle(isOn: $keepOtherLists) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Giữ cả ở danh sách khác").font(.subheadline)
+                            Text(keepOtherLists ? "Điểm tích thêm vẫn nằm trong danh sách cũ của nó."
+                                                : "Điểm tích thêm sẽ được chuyển hẳn sang danh sách này.")
+                                .font(.caption).foregroundColor(.secondary)
+                        }
+                    }
                     HStack {
                         Text("Đã chọn \(picked.count)").font(.footnote).foregroundColor(.secondary)
                         Spacer()
@@ -566,11 +584,20 @@ struct FolderEditView: View {
 
     private func save() {
         let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        saveFolder(original: original, name: n, memberIDs: picked)
+        saveFolder(original: original, name: n, memberIDs: picked, keepOtherLists: keepOtherLists)
         AlertKitAPI.present(title: original == nil ? "Đã tạo danh sách" : "Đã lưu danh sách",
                             icon: .done, style: .iOS17AppleMusic, haptic: .success)
         dismiss()
         onSaved(n)
+    }
+}
+
+/// Clear "done / failed" message (shown after any sheet has closed).
+func showResult(_ title: String, _ message: String) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+        let a = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        a.addAction(UIAlertAction(title: "OK", style: .default))
+        presentTop(a)
     }
 }
 
@@ -606,6 +633,7 @@ struct PlaceEditView: View {
     @State private var lat = ""
     @State private var long = ""
     @State private var chosen: Set<String> = []
+    @State private var multi = false
     @State private var newFolder = ""
     @State private var didLoad = false
 
@@ -623,9 +651,15 @@ struct PlaceEditView: View {
                 }
                 if showsFolder {
                     Section {
+                        Toggle("Cho vào nhiều danh sách", isOn: $multi)
+                            .onChange(of: multi) { on in
+                                if !on, chosen.count > 1, let first = folders.first(where: { chosen.contains($0) }) { chosen = [first] }
+                            }
                         ForEach(folders, id: \.self) { f in
                             Button {
-                                if chosen.contains(f) { chosen.remove(f) } else { chosen.insert(f) }
+                                if chosen.contains(f) { chosen.remove(f) }
+                                else if multi { chosen.insert(f) }
+                                else { chosen = [f] }          // one list only unless the switch is on
                             } label: {
                                 HStack {
                                     Image(systemName: chosen.contains(f) ? "checkmark.circle.fill" : "circle")
@@ -637,9 +671,10 @@ struct PlaceEditView: View {
                         }
                         TextField("Tạo danh sách mới…", text: $newFolder)
                     } header: {
-                        Text("Danh sách (chọn được nhiều)")
+                        Text("Danh sách")
                     } footer: {
-                        Text("Tích các danh sách muốn đưa vị trí vào. Gõ tên mới để tạo thêm danh sách.")
+                        Text(multi ? "Tích các danh sách muốn đưa vị trí vào. Gõ tên mới để tạo thêm danh sách."
+                                   : "Chọn một danh sách. Bật \"Cho vào nhiều danh sách\" nếu muốn vị trí nằm ở nhiều nơi.")
                     }
                 }
             }
@@ -655,7 +690,7 @@ struct PlaceEditView: View {
                 name = edit.item.name
                 lat = String(format: "%.7f", edit.item.lat)
                 long = String(format: "%.7f", edit.item.long)
-                if edit.mode == .edit { chosen = Set(edit.item.folders) }
+                if edit.mode == .edit { chosen = Set(edit.item.folders); multi = edit.item.folders.count > 1 }
                 else if !defaultFolder.isEmpty { chosen = [defaultFolder] }
             }
         }
@@ -669,7 +704,7 @@ struct PlaceEditView: View {
         }
         var lists = folders.filter { chosen.contains($0) } + chosen.filter { !folders.contains($0) }.sorted()
         let nf = newFolder.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !nf.isEmpty { lists.append(nf) }
+        if !nf.isEmpty { lists = multi ? lists + [nf] : [nf] }
         onSave(Result(name: name, lat: la, long: lo, folders: cleanLists(lists)))
         dismiss()
     }
