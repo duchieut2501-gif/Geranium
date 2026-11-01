@@ -6,6 +6,20 @@
 	<dict>
 		<key>CFBundleAlternateIcons</key>
 		<dict>
+			<key>Pin</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>Pin</string>
+				</array>
+			</dict>
+			<key>Outline</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>Outline</string>
+				</array>
+			</dict>
 			<key>Beta</key>
 			<dict>
 				<key>CFBundleIconFiles</key>

@@ -292,24 +292,28 @@ struct LocSimView: View {
 
 
 enum AppIconChoice: String, CaseIterable, Identifiable {
-    case d, e, f, custom
+    case e, i, d, h, g, custom          // display order: E, I, D, H, G
     var id: String { rawValue }
 
-    /// Name of the alternate icon in Info.plist (files Icons/Beta.png, Flore.png, Bouquet.png).
+    /// Alternate icon name in Info.plist (files Icons/<name>.png).
     var alternateName: String? {
         switch self {
-        case .d: return "Beta"
         case .e: return "Flore"
-        case .f: return "Bouquet"
+        case .i: return "Beta"
+        case .d: return "Bouquet"
+        case .h: return "Pin"
+        case .g: return "Outline"
         case .custom: return nil
         }
     }
 
     var title: String {
         switch self {
-        case .d: return "Ghim đôi"
         case .e: return "Bản đồ"
-        case .f: return "Sóng"
+        case .i: return "Vòng ngắm"
+        case .d: return "Ghim đôi"
+        case .h: return "Ghim đặc"
+        case .g: return "Ghim nét"
         case .custom: return "Ảnh của bạn"
         }
     }
@@ -317,11 +321,13 @@ enum AppIconChoice: String, CaseIterable, Identifiable {
     var preview: UIImage? {
         alternateName.flatMap { UIImage(named: $0) }
     }
+
+    static var builtIn: [AppIconChoice] { [.e, .i, .d, .h, .g] }
 }
 
 enum AppCustomizer {
     static var storedChoice: String {
-        get { UserDefaults.standard.string(forKey: "iconChoice") ?? AppIconChoice.d.rawValue }
+        get { UserDefaults.standard.string(forKey: "iconChoice") ?? AppIconChoice.e.rawValue }
         set { UserDefaults.standard.set(newValue, forKey: "iconChoice") }
     }
 
@@ -459,7 +465,7 @@ enum AppCustomizer {
     /// Puts back the original Info.plist (original name + icon D), then resprings.
     static func resetToDefault(completion: @escaping (Error?) -> Void) {
         guard let original = try? Data(contentsOf: backupURL) else {
-            setBuiltIn(.d) { _ in completion(nil) }
+            setBuiltIn(.e) { _ in completion(nil) }
             return
         }
         do {
@@ -468,7 +474,7 @@ enum AppCustomizer {
             _ = RootHelper.removeItem(at: infoURL)
             _ = RootHelper.copy(from: tmp, to: infoURL)
             guard FileManager.default.fileExists(atPath: infoURL.path) else { throw Failure.rootWrite }
-            storedChoice = AppIconChoice.d.rawValue
+            storedChoice = AppIconChoice.e.rawValue
             pendingRespring = true
             completion(nil)
         } catch {
@@ -513,7 +519,7 @@ struct CustomizeAppView: View {
     @AppStorage("textSize") private var textSize: String = TextSizeOption.small.rawValue
     @State private var manualLat = ""
     @State private var manualLong = ""
-    @State private var choice = AppIconChoice(rawValue: AppCustomizer.storedChoice) ?? .d
+    @State private var choice = AppIconChoice(rawValue: AppCustomizer.storedChoice) ?? .e
     @State private var name = AppCustomizer.currentDisplayName
     @State private var originalName = AppCustomizer.currentDisplayName
     @State private var pickedImage: UIImage? = nil      // raw photo, before crop
@@ -543,8 +549,8 @@ struct CustomizeAppView: View {
                     }
                 }
                 Section {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
-                        ForEach([AppIconChoice.d, .e, .f]) { option in
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 14) {
+                        ForEach(AppIconChoice.builtIn) { option in
                             iconTile(image: option.preview, title: option.title, selected: choice == option && croppedIcon == nil) {
                                 croppedIcon = nil
                                 AppCustomizer.setBuiltIn(option) { ok in
@@ -561,7 +567,7 @@ struct CustomizeAppView: View {
                 } header: {
                     Text("Biểu tượng")
                 } footer: {
-                    Text("3 mẫu có sẵn đổi ngay. \"Ảnh của bạn\": chọn ảnh, cắt cho vừa khung rồi bấm Áp dụng ở dưới.")
+                    Text("5 mẫu có sẵn đổi ngay. \"Ảnh của bạn\": chọn ảnh, cắt cho vừa khung rồi bấm Áp dụng ở dưới.")
                 }
 
                 Section {
@@ -623,7 +629,7 @@ struct CustomizeAppView: View {
                 Section {
                     Button("Khôi phục mặc định", role: .destructive) {
                         UIApplication.shared.confirmAlert(title: "Khôi phục mặc định?",
-                                                          body: "Tên về \"Location Simulator\", biểu tượng về mẫu Ghim đôi.",
+                                                          body: "Tên về \"Location Simulator\", biểu tượng về mẫu Bản đồ.",
                                                           onOK: {
                             AppCustomizer.resetToDefault { error in
                                 if let error { UIApplication.shared.alert(body: error.localizedDescription) }
