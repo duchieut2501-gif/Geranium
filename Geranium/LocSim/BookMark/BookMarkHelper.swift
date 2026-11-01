@@ -68,10 +68,67 @@ enum LocList: String {
 
 // MARK: - Storage
 
-private var store: UserDefaults? { UserDefaults(suiteName: sharedUserDefaultsSuiteName) }
+/// All saved places live in ONE file at a fixed path. It does not depend on how iOS registers the app,
+/// so renaming / changing the icon + respring (which re-registers the app) can no longer lose data.
+final class FileStore {
+    static let shared = FileStore()
+    private var dict: [String: Any] = [:]
+    private let lock = NSLock()
+    let url: URL
+
+    private init() {
+        let fm = FileManager.default
+        let fixed = URL(fileURLWithPath: "/var/mobile/Library/LocationSimulator/data.plist")
+        let fallback = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("LocationSimulator/data.plist")
+        var chosen = fixed
+        do {
+            try fm.createDirectory(at: fixed.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let probe = fixed.deletingLastPathComponent().appendingPathComponent(".probe")
+            try Data().write(to: probe); try? fm.removeItem(at: probe)
+        } catch {
+            try? fm.createDirectory(at: fallback.deletingLastPathComponent(), withIntermediateDirectories: true)
+            chosen = fallback
+        }
+        url = chosen
+
+        if let data = try? Data(contentsOf: url),
+           let p = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any] {
+            dict = p
+        } else if let old = UserDefaults(suiteName: sharedUserDefaultsSuiteName) {
+            // First run of this version: copy what the old shared storage had.
+            for key in ["bookmarks", "history", "folders", "favFolders"] {
+                if let v = old.object(forKey: key) { dict[key] = v }
+            }
+            write()
+        }
+    }
+
+    func array(forKey key: String) -> [Any]? {
+        lock.lock(); defer { lock.unlock() }
+        return dict[key] as? [Any]
+    }
+
+    func set(_ value: Any?, forKey key: String) {
+        lock.lock()
+        dict[key] = value
+        lock.unlock()
+        write()
+    }
+
+    func synchronize() {}
+
+    private func write() {
+        lock.lock(); let snapshot = dict; lock.unlock()
+        if let data = try? PropertyListSerialization.data(fromPropertyList: snapshot, format: .binary, options: 0) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+}
+
+private var store: FileStore? { FileStore.shared }
 
 func loadList(_ list: LocList) -> [Bookmark] {
-    migrateIfNeeded()
     let raw = store?.array(forKey: list.key) as? [[String: Any]] ?? []
     let items = raw.compactMap { Bookmark(dict: $0) }
     if raw.contains(where: { $0["id"] == nil }) { saveList(list, items) }   // persist generated ids once
@@ -86,20 +143,6 @@ func saveList(_ list: LocList, _ items: [Bookmark]) {
     store?.set(items.map { $0.dict }, forKey: list.key)
     store?.synchronize()
     NotificationCenter.default.post(name: .locListChanged, object: list.rawValue)
-}
-
-/// v2: everything auto-saved before (date > 0) moves to History; imported/old entries stay in Bookmarks.
-private func migrateIfNeeded() {
-    guard let s = store, !s.bool(forKey: "migratedV2") else { return }
-    s.set(true, forKey: "migratedV2")
-    let raw = s.array(forKey: LocList.bookmarks.key) as? [[String: Any]] ?? []
-    let all = raw.compactMap { Bookmark(dict: $0) }
-    let toHistory = all.filter { $0.date > 0 }
-    let keep = all.filter { $0.date <= 0 }
-    let oldHistory = (s.array(forKey: LocList.history.key) as? [[String: Any]] ?? []).compactMap { Bookmark(dict: $0) }
-    s.set((oldHistory + toHistory).map { $0.dict }, forKey: LocList.history.key)
-    s.set(keep.map { $0.dict }, forKey: LocList.bookmarks.key)
-    s.synchronize()
 }
 
 private func isNear(_ a: Bookmark, _ lat: Double, _ long: Double, _ meters: CLLocationDistance = 5) -> Bool {
