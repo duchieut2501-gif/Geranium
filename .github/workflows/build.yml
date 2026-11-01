@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -19,7 +19,7 @@ jobs:
       - name: Pick Xcode
         run: |
           ls /Applications | grep -i xcode
-          XC=$(ls -d /Applications/Xcode_15.4.app 2>/dev/null || ls -d /Applications/Xcode_15*.app | sort -V | tail -1)
+          XC=$(ls -d /Applications/Xcode_16.4.app 2>/dev/null || ls -d /Applications/Xcode_16*.app | sort -V | tail -1)
           sudo xcode-select -s "$XC"
           xcodebuild -version
 
