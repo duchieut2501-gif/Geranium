@@ -188,7 +188,7 @@ struct LocSimView: View {
                 HStack(alignment: .bottom) {
                     // Play (always available, re-play moves to the new pin) + Stop (grey → red while simulating)
                     HStack(spacing: 14) {
-                        Button(action: startAtPin) {
+                        Button(action: { withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) { startAtPin() } }) {
                             ZStack {
                                 Circle().fill(Color(red: 0.13, green: 0.59, blue: 0.95))
                                 PlayTriangle()
@@ -198,18 +198,22 @@ struct LocSimView: View {
                             .frame(width: 58, height: 58)
                             .shadow(color: .black.opacity(0.22), radius: 6, y: 3)
                         }
-                        Button(action: stop) {
-                            ZStack {
-                                Circle().fill(isFaking ? Color(red: 0.96, green: 0.26, blue: 0.21) : Color(.systemGray3))
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .fill(Color.white)
-                                    .frame(width: 20, height: 20)
+                        if isFaking {
+                            // Stop pops out to the right of Play, 15% smaller
+                            Button(action: stop) {
+                                ZStack {
+                                    Circle().fill(Color(red: 0.96, green: 0.26, blue: 0.21))
+                                    RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+                                        .fill(Color.white)
+                                        .frame(width: 17, height: 17)
+                                }
+                                .frame(width: 49, height: 49)
+                                .shadow(color: .black.opacity(0.22), radius: 6, y: 3)
                             }
-                            .frame(width: 58, height: 58)
-                            .shadow(color: .black.opacity(isFaking ? 0.22 : 0.1), radius: 6, y: 3)
-                            .animation(.easeInOut(duration: 0.2), value: isFaking)
+                            .transition(.asymmetric(
+                                insertion: .scale(scale: 0.2, anchor: .leading).combined(with: .opacity).combined(with: .offset(x: -30)),
+                                removal: .scale(scale: 0.2, anchor: .leading).combined(with: .opacity)))
                         }
-                        .disabled(!isFaking)
                     }
                     Spacer()
                     VStack(spacing: 10) {
@@ -283,7 +287,7 @@ struct LocSimView: View {
 
     private func stop() {
         LocSimManager.stopLocSim()
-        isFaking = false
+        withAnimation(.easeInOut(duration: 0.2)) { isFaking = false }
         AlertKitAPI.present(title: "Đã dừng giả lập", icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
 }
