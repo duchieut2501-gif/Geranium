@@ -131,14 +131,14 @@ struct LocSimView: View {
                             if isFaking {
                                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                                     .fill(Color.white)
-                                    .frame(width: 26, height: 26)
+                                    .frame(width: 21, height: 21)
                             } else {
                                 PlayTriangle()
                                     .fill(Color.white)
-                                    .frame(width: 30, height: 34)
+                                    .frame(width: 24, height: 27)
                             }
                         }
-                        .frame(width: 72, height: 72)
+                        .frame(width: 58, height: 58)
                         .shadow(color: .black.opacity(0.22), radius: 6, y: 3)
                         .animation(.easeInOut(duration: 0.2), value: isFaking)
                     }
