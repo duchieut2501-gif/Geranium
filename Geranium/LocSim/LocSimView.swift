@@ -405,6 +405,18 @@ enum AppCustomizer {
         presentTop(alert)
     }
 
+    private static var customIconURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("CustomIcon.png")
+    }
+
+    static func saveCustomIconCopy(_ image: UIImage) {
+        try? resized(image, to: 1024).pngData()?.write(to: customIconURL)
+    }
+
+    static func savedCustomIcon() -> UIImage? {
+        UIImage(contentsOfFile: customIconURL.path)
+    }
+
     static var bundleURL: URL { Bundle.main.bundleURL }
     static var infoURL: URL { bundleURL.appendingPathComponent("Info.plist") }
     private static var docs: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
@@ -576,10 +588,10 @@ struct CustomizeAppView: View {
     @State private var choice = AppIconChoice(rawValue: AppCustomizer.storedChoice) ?? .e
     @State private var name = AppCustomizer.currentDisplayName
     @State private var originalName = AppCustomizer.currentDisplayName
-    @State private var pickedImage: UIImage? = nil      // raw photo, before crop
-    @State private var croppedIcon: UIImage? = nil      // final square icon
+    @State private var cropPhoto: PickedPhoto? = nil    // photo waiting to be cropped
+    @State private var croppedIcon: UIImage? = nil      // final square icon (not applied yet)
+    @State private var savedCustom: UIImage? = AppCustomizer.savedCustomIcon()   // kept in the app, even if the photo is deleted
     @State private var showPicker = false
-    @State private var showCrop = false
     @State private var busy = false
     @State private var pending = AppCustomizer.pendingRespring
 
@@ -613,7 +625,7 @@ struct CustomizeAppView: View {
                                 }
                             }
                         }
-                        iconTile(image: croppedIcon, title: L("Ảnh của bạn", "Your photo"), selected: croppedIcon != nil || choice == .custom, placeholder: "photo.badge.plus") {
+                        iconTile(image: croppedIcon ?? savedCustom, title: L("Ảnh của bạn", "Your photo"), selected: croppedIcon != nil || choice == .custom, placeholder: "photo.badge.plus") {
                             showPicker = true
                         }
                     }
@@ -704,18 +716,18 @@ struct CustomizeAppView: View {
             .sheet(isPresented: $showPicker) {
                 PhotoPicker { image in
                     showPicker = false
-                    if let image {
-                        pickedImage = image
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showCrop = true }
+                    guard let image else { return }
+                    // Shrink big camera photos first (keeps the crop screen fast), then open the crop screen
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        let small = downscaled(image, maxSide: 2000)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { cropPhoto = PickedPhoto(image: small) }
                     }
                 }
             }
-            .fullScreenCover(isPresented: $showCrop) {
-                if let img = pickedImage {
-                    IconCropView(image: img) { result in
-                        showCrop = false
-                        if let result { croppedIcon = result }
-                    }
+            .fullScreenCover(item: $cropPhoto) { photo in
+                IconCropView(image: photo.image) { result in
+                    cropPhoto = nil
+                    if let result { croppedIcon = result }
                 }
             }
         }
@@ -741,6 +753,10 @@ struct CustomizeAppView: View {
                 if let error {
                     UIApplication.shared.alert(body: error.localizedDescription)
                 } else {
+                    if let icon = croppedIcon {
+                        AppCustomizer.saveCustomIconCopy(icon)   // own copy, independent of the photo library
+                        savedCustom = icon
+                    }
                     pending = true
                     AppCustomizer.askRespring()
                 }
@@ -776,6 +792,24 @@ struct CustomizeAppView: View {
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+struct PickedPhoto: Identifiable {
+    let id = UUID()
+    let image: UIImage
+}
+
+/// Upright copy with the longest side at most `maxSide` pixels.
+func downscaled(_ image: UIImage, maxSide: CGFloat) -> UIImage {
+    let w = image.size.width * image.scale, h = image.size.height * image.scale
+    let k = min(1, maxSide / max(w, h))
+    let size = CGSize(width: (w * k).rounded(), height: (h * k).rounded())
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    format.opaque = true
+    return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+        image.draw(in: CGRect(origin: .zero, size: size))
     }
 }
 
