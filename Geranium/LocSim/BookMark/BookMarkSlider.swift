@@ -8,6 +8,7 @@
 import SwiftUI
 import AlertKit
 import UniformTypeIdentifiers
+import CoreLocation
 
 /// What the edit sheet is doing.
 struct PlaceEdit: Identifiable {
@@ -32,6 +33,7 @@ struct LocationListView: View {
     @AppStorage("sort_bookmarks") private var sortBookmarks: String = BookmarkSort.az.rawValue
     @AppStorage("bmViewMode") private var viewModeRaw: String = BookmarkViewMode.all.rawValue
     @AppStorage("collapsedFolders") private var collapsedRaw: String = ""
+    @AppStorage("activeLoc") private var activeLoc: String = ""
     @State private var openFolder: String? = nil
     @State private var selected: Bookmark? = nil
     @State private var showMenu = false
@@ -169,8 +171,8 @@ struct LocationListView: View {
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "location.viewfinder")
-                    .font(.system(size: 20, weight: .light))
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 20, weight: isActive(item) ? .semibold : .light))
+                    .foregroundColor(isActive(item) ? .red : .secondary)
                     .frame(width: 26)
                 VStack(alignment: .leading, spacing: 1) {
                     Text((usesFolders && item.favorite ? "⭐ " : "") + item.displayName)
@@ -208,6 +210,13 @@ struct LocationListView: View {
                 .tint(.yellow)
             }
         }
+    }
+
+    /// The place currently being simulated (within 5 m).
+    private func isActive(_ item: Bookmark) -> Bool {
+        let p = activeLoc.split(separator: ",").compactMap { Double($0) }
+        guard p.count == 2 else { return false }
+        return CLLocation(latitude: p[0], longitude: p[1]).distance(from: CLLocation(latitude: item.lat, longitude: item.long)) <= 5
     }
 
     private func coordLine(_ item: Bookmark) -> String {

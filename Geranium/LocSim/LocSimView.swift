@@ -74,6 +74,8 @@ struct LocSimView: View {
     @State private var zoomRequest: ZoomRequest? = nil
     @State private var savePin: PlaceEdit? = nil
     @AppStorage("textSize") private var textSize: String = TextSizeOption.small.rawValue
+    /// "lat,long" of the place being simulated ("" = none). Lists use it to mark that row red.
+    @AppStorage("activeLoc") private var activeLoc: String = ""
 
     var body: some View {
         NavigationView {
@@ -137,6 +139,7 @@ struct LocSimView: View {
             LocationModel().requestAuthorisation()
             CLLocationManager().requestAlwaysAuthorization()
             AppCustomizer.restoreIconIfNeeded()
+            if !activeLoc.isEmpty { isFaking = true }      // simulation keeps running after the app closes
         }
     }
 
@@ -190,7 +193,7 @@ struct LocSimView: View {
                     HStack(spacing: 14) {
                         Button(action: { withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) { startAtPin() } }) {
                             ZStack {
-                                Circle().fill(Color(red: 0.13, green: 0.59, blue: 0.95))
+                                Circle().fill(Color(red: 0.96, green: 0.26, blue: 0.21))
                                 PlayTriangle()
                                     .fill(Color.white)
                                     .frame(width: 24, height: 27)
@@ -264,6 +267,7 @@ struct LocSimView: View {
                                   horizontalAccuracy: 5, verticalAccuracy: 5, timestamp: Date())
         LocSimManager.startLocSim(location: location)
         isFaking = true
+        activeLoc = "\(wgs.latitude),\(wgs.longitude)"
         logToHistory(lat: wgs.latitude, long: wgs.longitude)
         AlertKitAPI.present(title: "Đã bắt đầu giả lập", icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
@@ -288,6 +292,7 @@ struct LocSimView: View {
     private func stop() {
         LocSimManager.stopLocSim()
         withAnimation(.easeInOut(duration: 0.2)) { isFaking = false }
+        activeLoc = ""
         AlertKitAPI.present(title: "Đã dừng giả lập", icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
 }
