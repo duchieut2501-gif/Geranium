@@ -31,7 +31,7 @@ struct CustomMapView: UIViewRepresentable {
         if recenterTick != c.lastRecenterTick {
             c.lastRecenterTick = recenterTick
             if let loc = mapView.userLocation.location?.coordinate, CLLocationCoordinate2DIsValid(loc) {
-                mapView.setRegion(MKCoordinateRegion(center: loc, latitudinalMeters: 600, longitudinalMeters: 600), animated: true)
+                mapView.setCenter(loc, animated: true)   // keep the current zoom level
             }
         }
         if focusCoordinate == nil { c.lastFocus = nil }

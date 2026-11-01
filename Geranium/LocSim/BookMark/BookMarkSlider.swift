@@ -21,6 +21,7 @@ struct LocationListView: View {
     @State private var selected: Bookmark? = nil
     @State private var showMenu = false
     @State private var showImporter = false
+    @State private var showPaste = false
 
     private var sortRaw: Binding<String> { list == .history ? $sortHistory : $sortBookmarks }
     private var sort: BookmarkSort { BookmarkSort(rawValue: sortRaw.wrappedValue) ?? .az }
@@ -65,6 +66,9 @@ struct LocationListView: View {
         } message: {
             if let item = selected { Text(String(format: "%.6f, %.6f", item.lat, item.long)) }
         }
+        .sheet(isPresented: $showPaste) {
+            PasteImportView(title: list.title) { text in importText(text) }
+        }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.plainText, .text, .data]) { result in
             if case .success(let url) = result { importFile(url) }
         }
@@ -95,7 +99,10 @@ struct LocationListView: View {
 
             Menu {
                 Button { share() } label: { Label("Xuất file (.txt)", systemImage: "square.and.arrow.up") }
+                Button { copyText() } label: { Label("Sao chép văn bản", systemImage: "doc.on.doc") }
+                Divider()
                 Button { showImporter = true } label: { Label("Nhập từ file", systemImage: "square.and.arrow.down") }
+                Button { showPaste = true } label: { Label("Dán văn bản", systemImage: "doc.on.clipboard") }
             } label: {
                 Image(systemName: "ellipsis.circle").font(.title3)
             }
@@ -198,6 +205,15 @@ struct LocationListView: View {
         UIApplication.shared.present(alert: alert)
     }
 
+    private func copyText() {
+        guard !items.isEmpty else {
+            UIApplication.shared.alert(title: "Trống", body: "Chưa có vị trí nào để sao chép.")
+            return
+        }
+        UIPasteboard.general.string = exportText(list, filterAndSort(items, search: "", sort: sort))
+        AlertKitAPI.present(title: "Đã sao chép \(items.count) vị trí", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+    }
+
     private func share() {
         guard !items.isEmpty else {
             UIApplication.shared.alert(title: "Trống", body: "Chưa có vị trí nào để xuất.")
@@ -219,15 +235,62 @@ struct LocationListView: View {
             UIApplication.shared.alert(body: "Không đọc được file.")
             return
         }
+        importText(text)
+    }
+
+    private func importText(_ text: String) {
         let found = parseText(text)
         guard !found.isEmpty else {
-            UIApplication.shared.alert(body: "File không có vị trí nào đúng định dạng.")
+            UIApplication.shared.alert(body: "Không có vị trí nào đúng định dạng.")
             return
         }
         let added = addItems(list, found)
         reload()
         UIApplication.shared.alert(title: "Đã nhập vào \(list.title)",
                                    body: "Thêm \(added) vị trí" + (found.count > added ? ", bỏ qua \(found.count - added) vị trí trùng." : "."))
+    }
+}
+
+/// Paste exported text (e.g. from a Zalo message) and import it.
+struct PasteImportView: View {
+    @Environment(\.dismiss) var dismiss
+    let title: String
+    var onImport: (String) -> Void
+    @State private var text = ""
+
+    var body: some View {
+        NavigationView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Dán nội dung đã xuất (mỗi dòng: Tên | Vĩ độ, Kinh độ). Vị trí sẽ được nhập vào \(title).")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                TextEditor(text: $text)
+                    .font(.system(.footnote, design: .monospaced))
+                    .padding(6)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemBackground)))
+                Button {
+                    text = UIPasteboard.general.string ?? ""
+                } label: {
+                    Label("Dán từ bộ nhớ tạm", systemImage: "doc.on.clipboard")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding()
+            .navigationTitle("Dán văn bản")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) { Button("Huỷ") { dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Nhập") {
+                        let t = text
+                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { onImport(t) }
+                    }
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
     }
 }
 
