@@ -16,6 +16,10 @@ struct CustomMapView: UIViewRepresentable {
     var recenterTick: Int
     /// Set to move the map to a coordinate (e.g. when a saved location is started).
     var focusCoordinate: EquatableCoordinate?
+    /// Zoom from the slider (keeps the centre).
+    var zoomRequest: ZoomRequest? = nil
+    /// Reports the zoom level (0 far … 1 close) after the map moves.
+    var onZoomChanged: ((Double) -> Void)? = nil
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
@@ -36,6 +40,14 @@ struct CustomMapView: UIViewRepresentable {
                 mapView.setCenter(loc, animated: true)   // keep the current zoom level
             }
         }
+        if let z = zoomRequest, z.id != c.lastZoomID {
+            c.lastZoomID = z.id
+            let cam = mapView.camera.copy() as! MKMapCamera
+            cam.centerCoordinate = mapView.centerCoordinate
+            cam.centerCoordinateDistance = ZoomScale.distance(for: z.level)
+            c.applyingZoom = true
+            mapView.setCamera(cam, animated: false)
+        }
         if focusCoordinate == nil { c.lastFocus = nil }
         if let focus = focusCoordinate, focus != c.lastFocus {
             c.lastFocus = focus
@@ -51,6 +63,8 @@ struct CustomMapView: UIViewRepresentable {
         var parent: CustomMapView
         var lastRecenterTick = 0
         var lastFocus: EquatableCoordinate?
+        var lastZoomID: UUID?
+        var applyingZoom = false
         private var didInitialCenter = false
 
         init(_ parent: CustomMapView) {
@@ -59,8 +73,12 @@ struct CustomMapView: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             let center = mapView.centerCoordinate
+            let level = ZoomScale.level(for: mapView.camera.centerCoordinateDistance)
+            let fromSlider = applyingZoom
+            applyingZoom = false
             DispatchQueue.main.async {
                 self.parent.centerCoordinate = center
+                if !fromSlider { self.parent.onZoomChanged?(level) }
             }
         }
 
@@ -97,5 +115,58 @@ struct CenterPin: View {
         }
         .frame(width: 1, height: 1)
         .allowsHitTesting(false)
+    }
+}
+
+struct ZoomRequest: Equatable {
+    let id = UUID()
+    let level: Double
+}
+
+/// Maps slider level 0…1 to camera distance (log scale): 0 = 400 km, 1 = 15 m.
+enum ZoomScale {
+    static let far: Double = 400_000
+    static let near: Double = 15
+    static func distance(for level: Double) -> Double {
+        far * pow(near / far, min(max(level, 0), 1))
+    }
+    static func level(for distance: Double) -> Double {
+        let d = min(max(distance, near), far)
+        return log(d / far) / log(near / far)
+    }
+}
+
+/// Thin vertical slider. Top = zoomed out, bottom = zoomed in.
+struct ZoomSlider: View {
+    @Binding var level: Double
+    var onChange: (Double) -> Void
+    private let height: CGFloat = 220
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "minus").font(.system(size: 11, weight: .bold)).foregroundColor(.secondary)
+            ZStack(alignment: .top) {
+                Capsule().fill(Color.secondary.opacity(0.35)).frame(width: 4, height: height)
+                Capsule().fill(Color.accentColor).frame(width: 4, height: CGFloat(level) * height)
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 22, height: 22)
+                    .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+                    .offset(y: CGFloat(level) * height - 11)
+            }
+            .frame(width: 30, height: height)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { v in
+                        let l = Double(min(max(v.location.y / height, 0), 1))
+                        level = l
+                        onChange(l)
+                    }
+            )
+            Image(systemName: "plus").font(.system(size: 11, weight: .bold)).foregroundColor(.secondary)
+        }
+        .padding(.vertical, 10)
+        .background(Capsule().fill(.ultraThinMaterial))
     }
 }

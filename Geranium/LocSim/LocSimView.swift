@@ -27,13 +27,36 @@ struct PlayTriangle: Shape {
 }
 
 enum MainTab: String, CaseIterable, Identifiable {
-    case map, history, bookmarks
+    case map, places
+    var id: String { rawValue }
+    var title: String { self == .map ? "Bản đồ" : "Vị trí" }
+}
+
+enum PlacesTab: String, CaseIterable, Identifiable {
+    case bookmarks, history
+    var id: String { rawValue }
+    var title: String { self == .bookmarks ? "Đánh dấu" : "Lịch sử" }
+    var list: LocList { self == .bookmarks ? .bookmarks : .history }
+}
+
+/// App-wide text size (Settings). Default "small" like Mika's LocSim, independent of the iPhone setting.
+enum TextSizeOption: String, CaseIterable, Identifiable {
+    case small, medium, large, xlarge
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .map: return "Bản đồ"
-        case .history: return "Lịch sử"
-        case .bookmarks: return "Đánh dấu"
+        case .small: return "Nhỏ"
+        case .medium: return "Vừa"
+        case .large: return "Lớn"
+        case .xlarge: return "Rất lớn"
+        }
+    }
+    var dynamicType: DynamicTypeSize {
+        switch self {
+        case .small: return .small
+        case .medium: return .medium
+        case .large: return .large
+        case .xlarge: return .xLarge
         }
     }
 }
@@ -46,20 +69,32 @@ struct LocSimView: View {
     @State private var focusCoordinate: EquatableCoordinate? = nil
     @State private var isFaking = false
     @State private var settingsSheet = false
+    @State private var placesTab: PlacesTab = .bookmarks
+    @State private var zoomLevel: Double = 0.5           // 0 = far out (top), 1 = close in (bottom)
+    @State private var zoomRequest: ZoomRequest? = nil
+    @AppStorage("textSize") private var textSize: String = TextSizeOption.small.rawValue
 
     var body: some View {
         NavigationView {
             ZStack {
                 mapLayer                                  // kept alive so the map keeps its position
-                if tab != .map {
-                    LocationListView(list: tab == .history ? .history : .bookmarks,
-                                     onStart: { item in
-                                         fake(wgs: item.coordinate)
-                                         showOnMap(item)
-                                     },
-                                     onShowOnMap: { item in showOnMap(item) })
-                        .id(tab)
-                        .background(Color(.systemBackground).ignoresSafeArea())
+                if tab == .places {
+                    VStack(spacing: 0) {
+                        Picker("", selection: $placesTab) {
+                            ForEach(PlacesTab.allCases) { Text($0.title).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 6)
+                        LocationListView(list: placesTab.list,
+                                         onStart: { item in
+                                             fake(wgs: item.coordinate)
+                                             showOnMap(item)
+                                         },
+                                         onShowOnMap: { item in showOnMap(item) })
+                            .id(placesTab)
+                    }
+                    .background(Color(.systemBackground).ignoresSafeArea())
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -67,7 +102,7 @@ struct LocSimView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(action: stop) {
                         Image(systemName: "location.slash")
-                            .font(.title3)
+                            .font(.system(size: 17))
                             .foregroundColor(isFaking ? .red : .secondary)
                     }
                 }
@@ -76,11 +111,11 @@ struct LocSimView: View {
                         ForEach(MainTab.allCases) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.segmented)
-                    .frame(width: 250)
+                    .frame(width: 170)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { settingsSheet = true } label: {
-                        Image(systemName: "gearshape").font(.title3)
+                        Image(systemName: "gearshape").font(.system(size: 17))
                     }
                 }
             }
@@ -93,6 +128,10 @@ struct LocSimView: View {
             }
         }
         .navigationViewStyle(.stack)
+        .dynamicTypeSize((TextSizeOption(rawValue: textSize) ?? .small).dynamicType)
+        .onChange(of: tab) { newTab in
+            if newTab == .places { placesTab = .bookmarks }   // always open on Bookmarks
+        }
         .onAppear {
             LocationModel().requestAuthorisation()
             CLLocationManager().requestAlwaysAuthorization()
@@ -106,10 +145,21 @@ struct LocSimView: View {
         ZStack {
             CustomMapView(centerCoordinate: $centerCoordinate,
                           recenterTick: recenterTick,
-                          focusCoordinate: focusCoordinate)
+                          focusCoordinate: focusCoordinate,
+                          zoomRequest: zoomRequest,
+                          onZoomChanged: { zoomLevel = $0 })
                 .ignoresSafeArea(edges: .bottom)
 
             CenterPin()
+
+            // Vertical zoom slider at the right edge: drag down = zoom in, up = zoom out. Centre stays put.
+            HStack {
+                Spacer()
+                ZoomSlider(level: $zoomLevel) { level in
+                    zoomRequest = ZoomRequest(level: level)
+                }
+                .padding(.trailing, 6)
+            }
 
             VStack(spacing: 10) {
                 Spacer()
@@ -181,7 +231,7 @@ struct LocSimView: View {
         LocSimManager.startLocSim(location: location)
         isFaking = true
         logToHistory(lat: wgs.latitude, long: wgs.longitude)
-        AlertKitAPI.present(title: "Đã bắt đầu fake", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        AlertKitAPI.present(title: "Đã bắt đầu giả lập", icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
 
     private func showOnMap(_ item: Bookmark) {
@@ -198,7 +248,7 @@ struct LocSimView: View {
     private func stop() {
         LocSimManager.stopLocSim()
         isFaking = false
-        AlertKitAPI.present(title: "Đã dừng fake", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        AlertKitAPI.present(title: "Đã dừng giả lập", icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
 }
 
@@ -430,6 +480,7 @@ struct CustomizeAppView: View {
     @Environment(\.dismiss) var dismiss
     var onFakeCoordinate: ((CLLocationCoordinate2D) -> Void)? = nil
     @AppStorage("locAltitude") private var altitude: String = "0"
+    @AppStorage("textSize") private var textSize: String = TextSizeOption.small.rawValue
     @State private var manualLat = ""
     @State private var manualLong = ""
     @State private var choice = AppIconChoice(rawValue: AppCustomizer.storedChoice) ?? .d
@@ -510,11 +561,20 @@ struct CustomizeAppView: View {
                 Section {
                     TextField("Vĩ độ (latitude)", text: $manualLat).keyboardType(.numbersAndPunctuation)
                     TextField("Kinh độ (longitude)", text: $manualLong).keyboardType(.numbersAndPunctuation)
-                    Button("Bắt đầu fake toạ độ này") { fakeManual() }
+                    Button("Giả lập toạ độ này") { fakeManual() }
                 } header: {
-                    Text("Fake theo toạ độ")
+                    Text("Giả lập theo toạ độ")
                 } footer: {
                     Text("Có thể dán cả cặp \"21.05, 105.91\" vào ô Vĩ độ.")
+                }
+
+                Section {
+                    Picker("Cỡ chữ", selection: $textSize) {
+                        ForEach(TextSizeOption.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Cỡ chữ")
                 }
 
                 Section {
@@ -544,6 +604,7 @@ struct CustomizeAppView: View {
                 }
             }
             .navigationTitle("Cài đặt")
+            .dynamicTypeSize((TextSizeOption(rawValue: textSize) ?? .small).dynamicType)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {

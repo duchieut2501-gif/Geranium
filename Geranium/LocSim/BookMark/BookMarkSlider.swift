@@ -22,6 +22,7 @@ struct LocationListView: View {
     @State private var showMenu = false
     @State private var showImporter = false
     @State private var showPaste = false
+    @FocusState private var searchFocused: Bool
 
     private var sortRaw: Binding<String> { list == .history ? $sortHistory : $sortBookmarks }
     private var sort: BookmarkSort { BookmarkSort(rawValue: sortRaw.wrappedValue) ?? .az }
@@ -33,8 +34,10 @@ struct LocationListView: View {
             List {
                 ForEach(shown) { item in
                     Button {
+                        searchFocused = false                       // hide keyboard first
+                        hideKeyboard()
                         selected = item
-                        showMenu = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { showMenu = true }
                     } label: {
                         row(item)
                     }
@@ -45,6 +48,9 @@ struct LocationListView: View {
                 }
             }
             .listStyle(.plain)
+            .simultaneousGesture(DragGesture(minimumDistance: 12).onChanged { _ in
+                if searchFocused { searchFocused = false; hideKeyboard() }   // scrolling hides keyboard
+            })
             .overlay(emptyState, alignment: .center)
         }
         .onAppear { reload() }
@@ -53,7 +59,7 @@ struct LocationListView: View {
         }
         .confirmationDialog(selected?.displayName ?? "", isPresented: $showMenu, titleVisibility: .visible) {
             if let item = selected {
-                Button("Bắt đầu fake vị trí này") { onStart(item); reload() }
+                Button("Giả lập vị trí này") { onStart(item); reload() }
                 Button("Đặt vị trí này lên bản đồ") { onShowOnMap(item) }
                 Button("Sửa vị trí") { edit(item) }
                 if list == .history {
@@ -89,6 +95,8 @@ struct LocationListView: View {
                 Image(systemName: "magnifyingglass").foregroundColor(.secondary)
                 TextField("Tìm trong \(list.title)", text: $search)
                     .disableAutocorrection(true)
+                    .focused($searchFocused)
+                    .submitLabel(.search)
                 if !search.isEmpty {
                     Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundColor(.secondary) }
                 }
@@ -101,7 +109,7 @@ struct LocationListView: View {
                     ForEach(BookmarkSort.allCases) { Text($0.label).tag($0.rawValue) }
                 }
             } label: {
-                Image(systemName: "arrow.up.arrow.down").font(.title3)
+                Image(systemName: "arrow.up.arrow.down").font(.system(size: 16))
             }
 
             Menu {
@@ -111,7 +119,7 @@ struct LocationListView: View {
                 Button { showImporter = true } label: { Label("Nhập từ file", systemImage: "square.and.arrow.down") }
                 Button { showPaste = true } label: { Label("Dán văn bản", systemImage: "doc.on.clipboard") }
             } label: {
-                Image(systemName: "ellipsis.circle").font(.title3)
+                Image(systemName: "ellipsis.circle").font(.system(size: 17))
             }
         }
         .padding(.horizontal, 12)
@@ -125,13 +133,13 @@ struct LocationListView: View {
             Image(systemName: list == .history ? "clock.arrow.circlepath" : "star.fill")
                 .foregroundColor(list == .history ? .secondary : .yellow)
                 .frame(width: 22)
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(item.displayName)
-                    .font(.headline)
+                    .font(.body)
                     .foregroundColor(item.isUnnamed ? .secondary : .primary)
                     .lineLimit(2)
                 Text(String(format: "%.6f, %.6f", item.lat, item.long))
-                    .font(.caption.monospacedDigit())
+                    .font(.footnote.monospacedDigit())
                     .foregroundColor(.gray)
                 if item.date > 0 {
                     Text(Self.dateFormatter.string(from: Date(timeIntervalSince1970: item.date)))
@@ -158,7 +166,7 @@ struct LocationListView: View {
                 Text(list == .history ? "Chưa có lịch sử" : "Chưa có đánh dấu")
                     .font(.title3).foregroundColor(.secondary)
                 Text(list == .history
-                     ? "Mỗi lần bấm ▶ trên bản đồ, vị trí sẽ được ghi vào đây."
+                     ? "Mỗi lần bấm ▶ để giả lập trên bản đồ, vị trí sẽ được ghi vào đây."
                      : "Chạm vào một vị trí trong Lịch sử → Thêm vào Đánh dấu,\nhoặc nhập từ file (nút ⋯).")
                     .font(.footnote).foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -299,6 +307,10 @@ struct PasteImportView: View {
             }
         }
     }
+}
+
+func hideKeyboard() {
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
 }
 
 /// Presents any view controller on top of whatever is showing (works on iPad too).
