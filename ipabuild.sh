@@ -15,9 +15,7 @@ fi
 
 cd build
 
-if [ -e "$APPLICATION_NAME.tipa" ]; then
-rm $APPLICATION_NAME.tipa
-fi
+rm -f LocationSimulator.tipa
 
 # Build .app
 xcodebuild -project "$WORKING_LOCATION/$APPLICATION_NAME.xcodeproj" \
@@ -76,10 +74,11 @@ ldid -S"$WORKING_LOCATION/Bookmark Location in Geranium/entitlements.plist" "$TA
 # ldid -S"$WORKING_LOCATION/Bookmark Location in Geranium/entitlements.plist" "$TARGET_APP/PlugIns/Bookmark Location in Geranium.appex/Bookmark Location in Geranium.debug.dylib"
 # ldid -S"$WORKING_LOCATION/entitlements.plist" "$TARGET_APP/RootHelper"
 
-# Package .ipa
+# Package .tipa (app folder and file named "LocationSimulator")
+OUT_NAME=LocationSimulator
 rm -rf Payload
 mkdir Payload
-cp -r $APPLICATION_NAME.app Payload/$APPLICATION_NAME.app
-zip -vr $APPLICATION_NAME.tipa Payload
+cp -r $APPLICATION_NAME.app Payload/$OUT_NAME.app
+zip -qr $OUT_NAME.tipa Payload
 rm -rf $APPLICATION_NAME.app
 rm -rf Payload

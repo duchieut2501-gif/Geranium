@@ -73,6 +73,9 @@ struct LocationListView: View {
                 Button("Giả lập vị trí này") { onStart(item); reload() }
                 Button("Đặt vị trí này lên bản đồ") { onShowOnMap(item) }
                 Button("Sửa vị trí") { openEdit(PlaceEdit(mode: .edit, list: list, item: item)) }
+                if list == .bookmarks {
+                    Button(item.favorite ? "Bỏ khỏi Yêu thích" : "Thêm vào Yêu thích") { setFavorite(id: item.id, !item.favorite) }
+                }
                 if list == .history {
                     Button("Thêm vào Đánh dấu") { openEdit(PlaceEdit(mode: .newBookmark, list: .bookmarks, item: item)) }
                 }
@@ -113,22 +116,46 @@ struct LocationListView: View {
                 placeRow(item, indent: false, showFolder: usesFolders)
             }
         } else if let folder = openFolder {
-            ForEach(sorted(items.filter { $0.folder == folder })) { item in
+            ForEach(sorted(items.filter { $0.folders.contains(folder) })) { item in
                 placeRow(item, indent: false, showFolder: false)
             }
         } else {
+            // ⭐ Favourites: always on top and always open
+            let favs = sorted(items.filter { $0.favorite })
+            if !favs.isEmpty {
+                favouritesHeader(count: favs.count)
+                ForEach(favs) { item in
+                    placeRow(item, indent: true, showFolder: false)
+                }
+            }
             ForEach(folders, id: \.self) { folder in
                 folderRow(folder)
                 if viewMode == .all && !collapsed.contains(folder) {
-                    ForEach(sorted(items.filter { $0.folder == folder })) { item in
+                    ForEach(sorted(items.filter { $0.folders.contains(folder) })) { item in
                         placeRow(item, indent: true, showFolder: false)
                     }
                 }
             }
-            ForEach(sorted(items.filter { $0.folder.isEmpty || !folders.contains($0.folder) })) { item in
+            ForEach(sorted(items.filter { $0.folders.allSatisfy { !folders.contains($0) } })) { item in
                 placeRow(item, indent: false, showFolder: false)
             }
         }
+    }
+
+    private func favouritesHeader(count: Int) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "star.fill")
+                .font(.system(size: 18))
+                .foregroundColor(.yellow)
+                .frame(width: 26)
+            Text("Yêu thích")
+                .font(.body.weight(.semibold))
+            Text("\(count)")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            Spacer()
+        }
+        .listRowInsets(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
     }
 
     private func sorted(_ arr: [Bookmark]) -> [Bookmark] { filterAndSort(arr, search: "", sort: sort) }
@@ -146,7 +173,7 @@ struct LocationListView: View {
                     .foregroundColor(.secondary)
                     .frame(width: 26)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(item.displayName)
+                    Text((usesFolders && item.favorite ? "⭐ " : "") + item.displayName)
                         .font(.body)
                         .foregroundColor(item.isUnnamed ? .secondary : .primary)
                         .lineLimit(2)
@@ -169,6 +196,12 @@ struct LocationListView: View {
             Button(role: .destructive) { remove(item) } label: { Label("Xoá", systemImage: "trash") }
             Button { openEdit(PlaceEdit(mode: .edit, list: list, item: item)) } label: { Label("Sửa", systemImage: "pencil") }
                 .tint(.orange)
+            if usesFolders {
+                Button { setFavorite(id: item.id, !item.favorite) } label: {
+                    Label(item.favorite ? "Bỏ thích" : "Yêu thích", systemImage: item.favorite ? "star.slash" : "star")
+                }
+                .tint(.yellow)
+            }
         }
     }
 
@@ -181,7 +214,7 @@ struct LocationListView: View {
         if list == .history, item.date > 0 {
             s += "  ·  " + Self.dateFormatter.string(from: Date(timeIntervalSince1970: item.date))
         }
-        if showFolder, !item.folder.isEmpty { s = "📁 \(item.folder)  ·  " + s }
+        if showFolder, !item.folders.isEmpty { s = "📁 \(item.folders.joined(separator: ", "))  ·  " + s }
         return s
     }
 
@@ -200,7 +233,7 @@ struct LocationListView: View {
     }()
 
     private func folderRow(_ folder: String) -> some View {
-        let count = items.filter { $0.folder == folder }.count
+        let count = items.filter { $0.folders.contains(folder) }.count
         let isOpen = !collapsed.contains(folder)
         return Button {
             if viewMode == .all { toggle(folder) } else { openFolder = folder }
@@ -354,9 +387,9 @@ struct LocationListView: View {
         switch edit.mode {
         case .edit:
             updateItem(edit.list, id: edit.item.id, name: r.name, lat: r.lat, long: r.long,
-                       folder: edit.list == .bookmarks ? r.folder : nil)
+                       folders: edit.list == .bookmarks ? r.folders : nil)
         case .newBookmark:
-            let added = addToBookmarks(name: r.name, lat: r.lat, long: r.long, folder: r.folder)
+            let added = addToBookmarks(name: r.name, lat: r.lat, long: r.long, folders: r.folders)
             AlertKitAPI.present(title: added ? "Đã thêm vào Đánh dấu" : "Đã cập nhật trong Đánh dấu",
                                 icon: .done, style: .iOS17AppleMusic, haptic: .success)
         }
@@ -419,7 +452,7 @@ struct LocationListView: View {
         }
         // Importing while a list is open puts places without a list into it.
         if list == .bookmarks, let f = openFolder {
-            for i in found.indices where found[i].folder.isEmpty { found[i].folder = f }
+            for i in found.indices where !found[i].folders.contains(f) { found[i].folders.append(f) }
         }
         let added = addItems(list, found)
         reload()
@@ -491,8 +524,9 @@ struct FolderEditView: View {
                                 Text(item.displayName)
                                     .foregroundColor(item.isUnnamed ? .secondary : .primary)
                                     .lineLimit(2)
-                                if !item.folder.isEmpty && item.folder != original {
-                                    Text("📁 \(item.folder)").font(.footnote).foregroundColor(.secondary)
+                                let others = item.folders.filter { $0 != original }
+                                if !others.isEmpty {
+                                    Text("📁 \(others.joined(separator: ", "))").font(.footnote).foregroundColor(.secondary)
                                 }
                             }
                             Spacer(minLength: 0)
@@ -525,7 +559,7 @@ struct FolderEditView: View {
                 didLoad = true
                 items = loadList(.bookmarks)
                 name = original ?? ""
-                if let o = original { picked = Set(items.filter { $0.folder == o }.map { $0.id }) }
+                if let o = original { picked = Set(items.filter { $0.folders.contains(o) }.map { $0.id }) }
             }
         }
     }
@@ -560,7 +594,7 @@ func textPrompt(title: String, placeholder: String, text: String, onSave: @escap
 // MARK: - Edit / save sheet (name, latitude, longitude, list)
 
 struct PlaceEditView: View {
-    struct Result { var name: String; var lat: Double; var long: Double; var folder: String }
+    struct Result { var name: String; var lat: Double; var long: Double; var folders: [String] }
 
     @Environment(\.dismiss) var dismiss
     let edit: PlaceEdit
@@ -571,7 +605,7 @@ struct PlaceEditView: View {
     @State private var name = ""
     @State private var lat = ""
     @State private var long = ""
-    @State private var folder = ""
+    @State private var chosen: Set<String> = []
     @State private var newFolder = ""
     @State private var didLoad = false
 
@@ -589,15 +623,23 @@ struct PlaceEditView: View {
                 }
                 if showsFolder {
                     Section {
-                        Picker("Danh sách", selection: $folder) {
-                            Text("Không thuộc danh sách").tag("")
-                            ForEach(folders, id: \.self) { Text($0).tag($0) }
+                        ForEach(folders, id: \.self) { f in
+                            Button {
+                                if chosen.contains(f) { chosen.remove(f) } else { chosen.insert(f) }
+                            } label: {
+                                HStack {
+                                    Image(systemName: chosen.contains(f) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundColor(chosen.contains(f) ? .accentColor : Color(.tertiaryLabel))
+                                    Text(f).foregroundColor(.primary)
+                                    Spacer()
+                                }
+                            }
                         }
-                        TextField("Hoặc tạo danh sách mới…", text: $newFolder)
+                        TextField("Tạo danh sách mới…", text: $newFolder)
                     } header: {
-                        Text("Danh sách")
+                        Text("Danh sách (chọn được nhiều)")
                     } footer: {
-                        Text("Nếu gõ tên danh sách mới, vị trí sẽ được đưa vào danh sách đó.")
+                        Text("Tích các danh sách muốn đưa vị trí vào. Gõ tên mới để tạo thêm danh sách.")
                     }
                 }
             }
@@ -613,8 +655,8 @@ struct PlaceEditView: View {
                 name = edit.item.name
                 lat = String(format: "%.7f", edit.item.lat)
                 long = String(format: "%.7f", edit.item.long)
-                folder = edit.mode == .edit ? edit.item.folder : defaultFolder
-                if !folder.isEmpty && !folders.contains(folder) { newFolder = folder; folder = "" }
+                if edit.mode == .edit { chosen = Set(edit.item.folders) }
+                else if !defaultFolder.isEmpty { chosen = [defaultFolder] }
             }
         }
     }
@@ -625,8 +667,10 @@ struct PlaceEditView: View {
             UIApplication.shared.alert(body: "Toạ độ không hợp lệ.")
             return
         }
+        var lists = folders.filter { chosen.contains($0) } + chosen.filter { !folders.contains($0) }.sorted()
         let nf = newFolder.trimmingCharacters(in: .whitespacesAndNewlines)
-        onSave(Result(name: name, lat: la, long: lo, folder: nf.isEmpty ? folder : nf))
+        if !nf.isEmpty { lists.append(nf) }
+        onSave(Result(name: name, lat: la, long: lo, folders: cleanLists(lists)))
         dismiss()
     }
 }

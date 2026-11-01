@@ -146,7 +146,7 @@ struct LocSimView: View {
         mapContent
             .sheet(item: $savePin) { edit in
                 PlaceEditView(edit: edit, folders: loadFolders()) { r in
-                    let added = addToBookmarks(name: r.name, lat: r.lat, long: r.long, folder: r.folder)
+                    let added = addToBookmarks(name: r.name, lat: r.lat, long: r.long, folders: r.folders)
                     AlertKitAPI.present(title: added ? "Đã lưu vào Đánh dấu" : "Đã cập nhật trong Đánh dấu",
                                         icon: .done, style: .iOS17AppleMusic, haptic: .success)
                 }

@@ -20,12 +20,15 @@ struct Bookmark: Identifiable, Equatable {
     var long: Double
     /// timeIntervalSince1970. 0 = unknown.
     var date: Double
-    /// Name of the list (folder) it belongs to. "" = not in a list. Bookmarks only.
-    var folder: String = ""
+    /// Lists (folders) it belongs to — can be several. Bookmarks only.
+    var folders: [String] = []
+    /// Shown in "Yêu thích" at the top of Bookmarks.
+    var favorite: Bool = false
 
     init(id: String = UUID().uuidString, name: String, lat: Double, long: Double,
-         date: Double = Date().timeIntervalSince1970, folder: String = "") {
-        self.id = id; self.name = name; self.lat = lat; self.long = long; self.date = date; self.folder = folder
+         date: Double = Date().timeIntervalSince1970, folders: [String] = [], favorite: Bool = false) {
+        self.id = id; self.name = name; self.lat = lat; self.long = long; self.date = date
+        self.folders = folders; self.favorite = favorite
     }
 
     init?(dict: [String: Any]) {
@@ -36,10 +39,14 @@ struct Bookmark: Identifiable, Equatable {
         self.lat = lat
         self.long = long
         self.date = (dict["date"] as? NSNumber)?.doubleValue ?? 0
-        self.folder = dict["folder"] as? String ?? ""
+        if let arr = dict["folders"] as? [String] { self.folders = arr }
+        else if let one = dict["folder"] as? String, !one.isEmpty { self.folders = [one] }   // older single-list data
+        self.favorite = dict["fav"] as? Bool ?? false
     }
 
-    var dict: [String: Any] { ["id": id, "name": name, "lat": lat, "long": long, "date": date, "folder": folder] }
+    var dict: [String: Any] {
+        ["id": id, "name": name, "lat": lat, "long": long, "date": date, "folders": folders, "fav": favorite]
+    }
     var isUnnamed: Bool { name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var displayName: String { isUnnamed ? "Unnamed" : name }
     var coordinate: CLLocationCoordinate2D { CLLocationCoordinate2D(latitude: lat, longitude: long) }
@@ -112,35 +119,48 @@ func logToHistory(lat: Double, long: Double, name: String = "") {
     saveList(.history, items)
 }
 
-/// Saves a place in Bookmarks. If one already exists within 5 m it is updated (name / list) instead.
+/// Saves a place in Bookmarks. If one already exists within 5 m it is updated (name, lists added) instead.
 /// Returns false when it already existed.
 @discardableResult
-func addToBookmarks(name: String, lat: Double, long: Double, folder: String = "") -> Bool {
+func addToBookmarks(name: String, lat: Double, long: Double, folders: [String] = []) -> Bool {
     var items = loadList(.bookmarks)
     let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-    let cleanFolder = folder.trimmingCharacters(in: .whitespacesAndNewlines)
-    if !cleanFolder.isEmpty { createFolder(cleanFolder) }
+    let lists = cleanLists(folders)
+    lists.forEach { createFolder($0) }
     if let i = items.firstIndex(where: { isNear($0, lat, long) }) {
         if !cleanName.isEmpty { items[i].name = cleanName }
-        if !cleanFolder.isEmpty { items[i].folder = cleanFolder }
+        for f in lists where !items[i].folders.contains(f) { items[i].folders.append(f) }
         saveList(.bookmarks, items)
         return false
     }
-    items.append(Bookmark(name: cleanName, lat: lat, long: long, date: Date().timeIntervalSince1970, folder: cleanFolder))
+    items.append(Bookmark(name: cleanName, lat: lat, long: long, date: Date().timeIntervalSince1970, folders: lists))
     saveList(.bookmarks, items)
     return true
 }
 
-func updateItem(_ list: LocList, id: String, name: String, lat: Double, long: Double, folder: String? = nil) {
+func cleanLists(_ names: [String]) -> [String] {
+    var out: [String] = []
+    for n in names.map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }) where !n.isEmpty && !out.contains(n) { out.append(n) }
+    return out
+}
+
+func setFavorite(id: String, _ on: Bool) {
+    var items = loadList(.bookmarks)
+    guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+    items[i].favorite = on
+    saveList(.bookmarks, items)
+}
+
+func updateItem(_ list: LocList, id: String, name: String, lat: Double, long: Double, folders: [String]? = nil) {
     var items = loadList(list)
     guard let i = items.firstIndex(where: { $0.id == id }) else { return }
     items[i].name = name.trimmingCharacters(in: .whitespacesAndNewlines)
     items[i].lat = lat
     items[i].long = long
-    if let folder {
-        let f = folder.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !f.isEmpty { createFolder(f) }
-        items[i].folder = f
+    if let folders {
+        let lists = cleanLists(folders)
+        lists.forEach { createFolder($0) }
+        items[i].folders = lists
     }
     saveList(list, items)
 }
@@ -152,7 +172,7 @@ private let foldersKey = "folders"
 /// All list names, A→Z (Vietnamese order). Includes lists that are still empty.
 func loadFolders() -> [String] {
     var names = Set(store?.array(forKey: foldersKey) as? [String] ?? [])
-    for b in loadList(.bookmarks) where !b.folder.isEmpty { names.insert(b.folder) }
+    for b in loadList(.bookmarks) { b.folders.forEach { names.insert($0) } }
     return names.sorted { $0.compare($1, options: [.caseInsensitive, .numeric], range: nil, locale: Locale(identifier: "vi_VN")) == .orderedAscending }
 }
 
@@ -176,7 +196,9 @@ func renameFolder(_ old: String, to new: String) {
     if !names.contains(n) { names.append(n) }
     saveFolders(names)
     var items = loadList(.bookmarks)
-    for i in items.indices where items[i].folder == old { items[i].folder = n }
+    for i in items.indices where items[i].folders.contains(old) {
+        items[i].folders = cleanLists(items[i].folders.map { $0 == old ? n : $0 })
+    }
     saveList(.bookmarks, items)
 }
 
@@ -188,8 +210,11 @@ func saveFolder(original: String?, name: String, memberIDs: Set<String>) {
     if let old = original, old != n { renameFolder(old, to: n) } else { createFolder(n) }
     var items = loadList(.bookmarks)
     for i in items.indices {
-        if memberIDs.contains(items[i].id) { items[i].folder = n }
-        else if items[i].folder == n { items[i].folder = "" }
+        if memberIDs.contains(items[i].id) {
+            if !items[i].folders.contains(n) { items[i].folders.append(n) }   // added, keeps its other lists
+        } else {
+            items[i].folders.removeAll { $0 == n }
+        }
     }
     saveList(.bookmarks, items)
 }
@@ -198,7 +223,7 @@ func saveFolder(original: String?, name: String, memberIDs: Set<String>) {
 func deleteFolder(_ name: String) {
     saveFolders((store?.array(forKey: foldersKey) as? [String] ?? []).filter { $0 != name })
     var items = loadList(.bookmarks)
-    for i in items.indices where items[i].folder == name { items[i].folder = "" }
+    for i in items.indices { items[i].folders.removeAll { $0 == name } }
     saveList(.bookmarks, items)
 }
 
@@ -214,10 +239,11 @@ func addItems(_ list: LocList, _ new: [Bookmark]) -> Int {
     var items = loadList(list)
     var added = 0
     for n in new where !items.contains(where: { isNear($0, n.lat, n.long) }) {
-        let folder = list == .bookmarks ? n.folder : ""
-        if !folder.isEmpty { createFolder(folder) }
+        let lists = list == .bookmarks ? cleanLists(n.folders) : []
+        lists.forEach { createFolder($0) }
         items.append(Bookmark(name: n.name, lat: n.lat, long: n.long,
-                              date: n.date > 0 ? n.date : Date().timeIntervalSince1970, folder: folder))
+                              date: n.date > 0 ? n.date : Date().timeIntervalSince1970,
+                              folders: lists, favorite: list == .bookmarks && n.favorite))
         added += 1
     }
     saveList(list, items)
@@ -316,12 +342,14 @@ func exportText(_ list: LocList, _ items: [Bookmark]) -> String {
     let day = DateFormatter()
     day.dateFormat = "dd/MM/yyyy"
     var lines = ["# Location Simulator - \(list.title) - \(day.string(from: Date()))",
-                 "# Tên | Vĩ độ, Kinh độ | Thời gian | Danh sách"]
+                 "# Tên | Vĩ độ, Kinh độ | Thời gian | Danh sách (cách nhau bằng ;) | ★ = Yêu thích"]
     let clean: (String) -> String = { $0.replacingOccurrences(of: "|", with: "/").replacingOccurrences(of: "\n", with: " ") }
     for b in items {
         var line = "\(clean(b.displayName)) | " + String(format: "%.7f, %.7f", b.lat, b.long)
         let time = b.date > 0 ? lineDateFormatter.string(from: Date(timeIntervalSince1970: b.date)) : ""
-        if !b.folder.isEmpty { line += " | \(time) | \(clean(b.folder))" }
+        let lists = b.folders.map(clean).map { $0.replacingOccurrences(of: ";", with: ",") }.joined(separator: "; ")
+        if b.favorite { line += " | \(time) | \(lists) | ★" }
+        else if !lists.isEmpty { line += " | \(time) | \(lists)" }
         else if !time.isEmpty { line += " | \(time)" }
         lines.append(line)
     }
@@ -357,16 +385,17 @@ func parseText(_ text: String) -> [Bookmark] {
         let line = rawLine.trimmingCharacters(in: .whitespaces)
         if line.isEmpty || line.hasPrefix("#") { continue }
         let parts = line.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
-        var name = "", coordPart = line, date: Double = 0, folder = ""
+        var name = "", coordPart = line, date: Double = 0, lists: [String] = [], fav = false
         if parts.count >= 2 {
             name = parts[0]
             coordPart = parts[1]
             if parts.count >= 3, let d = lineDateFormatter.date(from: parts[2]) { date = d.timeIntervalSince1970 }
-            if parts.count >= 4 { folder = parts[3] }
+            if parts.count >= 4 { lists = cleanLists(parts[3].components(separatedBy: ";")) }
+            if parts.count >= 5 { fav = parts[4].contains("★") || foldForSearch(parts[4]).contains("yeu thich") }
         }
         guard let (la, lo) = parseCoord(coordPart) else { continue }
         if name.caseInsensitiveCompare("Unnamed") == .orderedSame { name = "" }
-        result.append(Bookmark(name: name, lat: la, long: lo, date: date, folder: folder))
+        result.append(Bookmark(name: name, lat: la, long: lo, date: date, folders: lists, favorite: fav))
     }
     return result
 }
