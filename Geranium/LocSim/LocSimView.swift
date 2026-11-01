@@ -123,16 +123,24 @@ struct LocSimView: View {
                         AlertKitAPI.present(title: "Đã sao chép toạ độ", icon: .done, style: .iOS17AppleMusic, haptic: .success)
                     }
                 HStack(alignment: .bottom) {
-                    // Start: round blue "play" button, triangle centred
-                    Button(action: startAtPin) {
+                    // Play (blue) -> while faking becomes Stop (red, square in the middle)
+                    Button(action: { isFaking ? stop() : startAtPin() }) {
                         ZStack {
-                            Circle().fill(Color(red: 0.13, green: 0.59, blue: 0.95))
-                            PlayTriangle()
-                                .fill(Color.white)
-                                .frame(width: 30, height: 34)
+                            Circle().fill(isFaking ? Color(red: 0.96, green: 0.26, blue: 0.21)
+                                                   : Color(red: 0.13, green: 0.59, blue: 0.95))
+                            if isFaking {
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .fill(Color.white)
+                                    .frame(width: 26, height: 26)
+                            } else {
+                                PlayTriangle()
+                                    .fill(Color.white)
+                                    .frame(width: 30, height: 34)
+                            }
                         }
                         .frame(width: 72, height: 72)
                         .shadow(color: .black.opacity(0.22), radius: 6, y: 3)
+                        .animation(.easeInOut(duration: 0.2), value: isFaking)
                     }
                     Spacer()
                     // Go to my real location
