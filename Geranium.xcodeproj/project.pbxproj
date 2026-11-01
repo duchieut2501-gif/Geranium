@@ -647,7 +647,7 @@
 				DEVELOPMENT_TEAM = 7G89J82G2A;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Bookmark Location in Geranium/Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "Bookmark Location in Geranium";
+				INFOPLIST_KEY_CFBundleDisplayName = "Location Simulator";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -675,7 +675,7 @@
 				DEVELOPMENT_TEAM = 7G89J82G2A;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Bookmark Location in Geranium/Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "Bookmark Location in Geranium";
+				INFOPLIST_KEY_CFBundleDisplayName = "Location Simulator";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -828,7 +828,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Geranium/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Geranium;
+				INFOPLIST_KEY_CFBundleDisplayName = "Location Simulator";
 				INFOPLIST_KEY_LSApplicationCategoryType = "";
 				INFOPLIST_KEY_NSLocationUsageDescription = "Enabling location for Geranium makes it possible for the app to display your location on the map.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "This will allow the app to display your location on the LocSim map.";
@@ -867,7 +867,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Geranium/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Geranium;
+				INFOPLIST_KEY_CFBundleDisplayName = "Location Simulator";
 				INFOPLIST_KEY_LSApplicationCategoryType = "";
 				INFOPLIST_KEY_NSLocationUsageDescription = "Enabling location for Geranium makes it possible for the app to display your location on the map.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "This will allow the app to display your location on the LocSim map.";

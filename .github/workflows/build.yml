@@ -10,6 +10,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Pick Xcode
         run: |
@@ -18,8 +20,15 @@ jobs:
           sudo xcode-select -s "$XC"
           xcodebuild -version
 
-      - name: Install ldid
-        run: brew install ldid
+      - name: Install ldid, make, Theos
+        run: |
+          brew install ldid make xz
+          echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
+          git clone --recursive --depth 1 https://github.com/theos/theos.git $HOME/theos
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git /tmp/sdks
+          cd /tmp/sdks && git sparse-checkout set iPhoneOS14.5.sdk
+          mkdir -p $HOME/theos/sdks && mv /tmp/sdks/iPhoneOS14.5.sdk $HOME/theos/sdks/
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
 
       - name: Build
         run: |

@@ -43,7 +43,13 @@ if [ -e "$TARGET_APP/embedded.mobileprovision" ]; then
     rm -rf "$TARGET_APP/embedded.mobileprovision"
 fi
 
-# RootHelper is not needed for location simulation only -> skipped (no Theos required).
+# Root helper (needed to change the app name / photo icon). Requires Theos.
+git submodule update --init --recursive
+cd "$WORKING_LOCATION/RootHelper"
+make clean
+make
+cp "$WORKING_LOCATION/RootHelper/.theos/obj/debug/GeraniumRootHelper" "$WORKING_LOCATION/build/Geranium.app/GeraniumRootHelper"
+cd -
 
 #cp $WORKING_LOCATION/build/DerivedData/Build/Products/$CONFIGURATION-iphoneos/RootHelper $WORKING_LOCATION/build/Geranium.app/RootHelper
 
