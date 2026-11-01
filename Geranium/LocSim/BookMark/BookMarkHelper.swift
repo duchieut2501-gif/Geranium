@@ -1,9 +1,8 @@
 //
 //  BookMarkHelper.swift
-//  Geranium
+//  Location Simulator
 //
-//  Created by cclerc on 21.12.23.
-//  Modified: auto-save, rename, search & A-Z sort.
+//  Storage for History (every fake) and Bookmarks, search/sort, text export/import.
 //
 
 import Foundation
@@ -11,7 +10,6 @@ import SwiftUI
 import CoreLocation
 
 let sharedUserDefaultsSuiteName = "group.live.cclerc.geraniumBookmarks"
-private let bookmarksKey = "bookmarks"
 
 // MARK: - Model
 
@@ -20,15 +18,11 @@ struct Bookmark: Identifiable, Equatable {
     var name: String
     var lat: Double
     var long: Double
-    /// Last time this location was faked/saved (timeIntervalSince1970). 0 = unknown (old bookmarks).
+    /// timeIntervalSince1970. 0 = unknown.
     var date: Double
 
     init(id: String = UUID().uuidString, name: String, lat: Double, long: Double, date: Double = Date().timeIntervalSince1970) {
-        self.id = id
-        self.name = name
-        self.lat = lat
-        self.long = long
-        self.date = date
+        self.id = id; self.name = name; self.lat = lat; self.long = long; self.date = date
     }
 
     init?(dict: [String: Any]) {
@@ -41,93 +35,112 @@ struct Bookmark: Identifiable, Equatable {
         self.date = (dict["date"] as? NSNumber)?.doubleValue ?? 0
     }
 
-    var dict: [String: Any] {
-        ["id": id, "name": name, "lat": lat, "long": long, "date": date]
-    }
+    var dict: [String: Any] { ["id": id, "name": name, "lat": lat, "long": long, "date": date] }
+    var isUnnamed: Bool { name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var displayName: String { isUnnamed ? "Unnamed" : name }
+    var coordinate: CLLocationCoordinate2D { CLLocationCoordinate2D(latitude: lat, longitude: long) }
+}
 
-    var isUnnamed: Bool {
-        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
+enum LocList: String {
+    case history, bookmarks
 
-    var displayName: String {
-        isUnnamed ? "Unnamed" : name
-    }
+    /// "bookmarks" key is shared with the Apple Maps "save location" extension.
+    var key: String { self == .history ? "history" : "bookmarks" }
+    var title: String { self == .history ? "Lịch sử" : "Đánh dấu" }
+    var fileTag: String { self == .history ? "LichSu" : "DanhDau" }
 }
 
 // MARK: - Storage
 
-func loadBookmarks() -> [Bookmark] {
-    let raw = BookMarkRetrieve()
-    let list = raw.compactMap { Bookmark(dict: $0) }
-    // Old bookmarks have no id -> persist the generated ids once so they stay stable.
-    if raw.contains(where: { $0["id"] == nil }) {
-        saveBookmarks(list)
-    }
-    return list
+private var store: UserDefaults? { UserDefaults(suiteName: sharedUserDefaultsSuiteName) }
+
+func loadList(_ list: LocList) -> [Bookmark] {
+    migrateIfNeeded()
+    let raw = store?.array(forKey: list.key) as? [[String: Any]] ?? []
+    let items = raw.compactMap { Bookmark(dict: $0) }
+    if raw.contains(where: { $0["id"] == nil }) { saveList(list, items) }   // persist generated ids once
+    return items
 }
 
-func saveBookmarks(_ bookmarks: [Bookmark]) {
-    let sharedUserDefaults = UserDefaults(suiteName: sharedUserDefaultsSuiteName)
-    sharedUserDefaults?.set(bookmarks.map { $0.dict }, forKey: bookmarksKey)
-    sharedUserDefaults?.synchronize()
+func saveList(_ list: LocList, _ items: [Bookmark]) {
+    store?.set(items.map { $0.dict }, forKey: list.key)
+    store?.synchronize()
 }
 
-/// Called every time a fake location is started from the map.
-/// If a saved location already exists within `mergeDistance` meters, it is moved to the top
-/// (date refreshed) instead of creating a duplicate. New locations are saved without a name.
-@discardableResult
-func autoSaveFakedLocation(lat: Double, long: Double, mergeDistance: CLLocationDistance = 5) -> Bookmark {
-    var bookmarks = loadBookmarks()
-    let target = CLLocation(latitude: lat, longitude: long)
+/// v2: everything auto-saved before (date > 0) moves to History; imported/old entries stay in Bookmarks.
+private func migrateIfNeeded() {
+    guard let s = store, !s.bool(forKey: "migratedV2") else { return }
+    s.set(true, forKey: "migratedV2")
+    let raw = s.array(forKey: LocList.bookmarks.key) as? [[String: Any]] ?? []
+    let all = raw.compactMap { Bookmark(dict: $0) }
+    let toHistory = all.filter { $0.date > 0 }
+    let keep = all.filter { $0.date <= 0 }
+    let oldHistory = (s.array(forKey: LocList.history.key) as? [[String: Any]] ?? []).compactMap { Bookmark(dict: $0) }
+    s.set((oldHistory + toHistory).map { $0.dict }, forKey: LocList.history.key)
+    s.set(keep.map { $0.dict }, forKey: LocList.bookmarks.key)
+    s.synchronize()
+}
+
+private func isNear(_ a: Bookmark, _ lat: Double, _ long: Double, _ meters: CLLocationDistance = 5) -> Bool {
+    CLLocation(latitude: a.lat, longitude: a.long).distance(from: CLLocation(latitude: lat, longitude: long)) <= meters
+}
+
+/// Every fake is logged in History. A location within 5 m is moved to the top instead of duplicated.
+func logToHistory(lat: Double, long: Double, name: String = "") {
+    var items = loadList(.history)
     let now = Date().timeIntervalSince1970
-
-    if let index = bookmarks.firstIndex(where: {
-        CLLocation(latitude: $0.lat, longitude: $0.long).distance(from: target) <= mergeDistance
-    }) {
-        bookmarks[index].date = now
-        saveBookmarks(bookmarks)
-        return bookmarks[index]
+    if let i = items.firstIndex(where: { isNear($0, lat, long) }) {
+        items[i].date = now
+        if items[i].isUnnamed && !name.isEmpty { items[i].name = name }
+    } else {
+        items.append(Bookmark(name: name, lat: lat, long: long, date: now))
     }
-
-    let new = Bookmark(name: "", lat: lat, long: long, date: now)
-    bookmarks.append(new)
-    saveBookmarks(bookmarks)
-    return new
+    saveList(.history, items)
 }
 
-func renameBookmark(id: String, to newName: String) {
-    var bookmarks = loadBookmarks()
-    guard let index = bookmarks.firstIndex(where: { $0.id == id }) else { return }
-    bookmarks[index].name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-    saveBookmarks(bookmarks)
-}
-
-func deleteBookmark(id: String) {
-    var bookmarks = loadBookmarks()
-    bookmarks.removeAll { $0.id == id }
-    saveBookmarks(bookmarks)
-}
-
-/// Kept for compatibility (Mika import / old code paths).
+/// Returns false if it was already bookmarked (within 5 m).
 @discardableResult
-func BookMarkSave(lat: Double, long: Double, name: String) -> Bool {
-    var bookmarks = loadBookmarks()
-    bookmarks.append(Bookmark(name: name, lat: lat, long: long))
-    saveBookmarks(bookmarks)
-    successVibrate()
+func addToBookmarks(_ b: Bookmark) -> Bool {
+    var items = loadList(.bookmarks)
+    if items.contains(where: { isNear($0, b.lat, b.long) }) { return false }
+    items.append(Bookmark(name: b.name, lat: b.lat, long: b.long, date: Date().timeIntervalSince1970))
+    saveList(.bookmarks, items)
     return true
 }
 
-func BookMarkRetrieve() -> [[String: Any]] {
-    let sharedUserDefaults = UserDefaults(suiteName: sharedUserDefaultsSuiteName)
-    return sharedUserDefaults?.array(forKey: bookmarksKey) as? [[String: Any]] ?? []
+func updateItem(_ list: LocList, id: String, name: String, lat: Double, long: Double) {
+    var items = loadList(list)
+    guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+    items[i].name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    items[i].lat = lat
+    items[i].long = long
+    saveList(list, items)
+}
+
+func deleteItem(_ list: LocList, id: String) {
+    var items = loadList(list)
+    items.removeAll { $0.id == id }
+    saveList(list, items)
+}
+
+/// Adds items, skipping duplicates (within 5 m). Returns number added.
+@discardableResult
+func addItems(_ list: LocList, _ new: [Bookmark]) -> Int {
+    var items = loadList(list)
+    var added = 0
+    for n in new where !items.contains(where: { isNear($0, n.lat, n.long) }) {
+        items.append(Bookmark(name: n.name, lat: n.lat, long: n.long, date: n.date > 0 ? n.date : Date().timeIntervalSince1970))
+        added += 1
+    }
+    saveList(list, items)
+    return added
 }
 
 // MARK: - Search & sort
 
 private let vietnameseLocale = Locale(identifier: "vi_VN")
 
-/// "Bến Thành" -> "ben thanh", "Đà Lạt" -> "da lat" so searching works without accents.
+/// "Bến Thành" -> "ben thanh", "Đà Lạt" -> "da lat"
 func foldForSearch(_ text: String) -> String {
     text.replacingOccurrences(of: "đ", with: "d")
         .replacingOccurrences(of: "Đ", with: "D")
@@ -137,78 +150,116 @@ func foldForSearch(_ text: String) -> String {
 enum BookmarkSort: String, CaseIterable, Identifiable {
     case az, za, newest, oldest
     var id: String { rawValue }
-
     var label: String {
         switch self {
         case .az: return "Tên A → Z"
         case .za: return "Tên Z → A"
-        case .newest: return "Mới dùng gần nhất"
+        case .newest: return "Mới nhất"
         case .oldest: return "Cũ nhất"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .az: return "textformat.abc"
-        case .za: return "textformat.abc"
-        case .newest: return "clock.arrow.circlepath"
-        case .oldest: return "clock"
         }
     }
 }
 
-func filterAndSort(_ bookmarks: [Bookmark], search: String, sort: BookmarkSort) -> [Bookmark] {
-    let query = foldForSearch(search.trimmingCharacters(in: .whitespacesAndNewlines))
-    let filtered = query.isEmpty ? bookmarks : bookmarks.filter {
-        foldForSearch($0.displayName).contains(query)
+func filterAndSort(_ items: [Bookmark], search: String, sort: BookmarkSort) -> [Bookmark] {
+    let q = foldForSearch(search.trimmingCharacters(in: .whitespacesAndNewlines))
+    let filtered = q.isEmpty ? items : items.filter {
+        foldForSearch($0.displayName).contains(q) || String(format: "%.6f, %.6f", $0.lat, $0.long).contains(q)
     }
-
-    func nameOrder(_ a: Bookmark, _ b: Bookmark) -> ComparisonResult {
-        a.name.compare(b.name, options: [.caseInsensitive, .numeric], range: nil, locale: vietnameseLocale)
-    }
-
     switch sort {
     case .az, .za:
         return filtered.sorted { a, b in
-            // Unnamed locations always go to the bottom, newest first.
-            if a.isUnnamed != b.isUnnamed { return !a.isUnnamed }
+            if a.isUnnamed != b.isUnnamed { return !a.isUnnamed }   // Unnamed at the bottom
             if a.isUnnamed { return a.date > b.date }
-            let r = nameOrder(a, b)
+            let r = a.name.compare(b.name, options: [.caseInsensitive, .numeric], range: nil, locale: vietnameseLocale)
             if r == .orderedSame { return a.date > b.date }
             return sort == .az ? r == .orderedAscending : r == .orderedDescending
         }
-    case .newest:
-        return filtered.sorted { $0.date > $1.date }
-    case .oldest:
-        return filtered.sorted { $0.date < $1.date }
+    case .newest: return filtered.sorted { $0.date > $1.date }
+    case .oldest: return filtered.sorted { $0.date < $1.date }
     }
+}
+
+// MARK: - Text export / import
+//
+// # Location Simulator - Đánh dấu - 01/11/2026
+// # Tên | Vĩ độ, Kinh độ | Thời gian
+// Vincom | 21.049102, 105.915230 | 01/11/2026 17:12
+// 21.050011, 105.912300            <- coordinates only is fine too
+
+private let lineDateFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.timeZone = .current
+    f.dateFormat = "dd/MM/yyyy HH:mm"
+    return f
+}()
+
+func exportText(_ list: LocList, _ items: [Bookmark]) -> String {
+    let day = DateFormatter()
+    day.dateFormat = "dd/MM/yyyy"
+    var lines = ["# Location Simulator - \(list.title) - \(day.string(from: Date()))",
+                 "# Tên | Vĩ độ, Kinh độ | Thời gian"]
+    for b in items {
+        let name = b.displayName.replacingOccurrences(of: "|", with: "/").replacingOccurrences(of: "\n", with: " ")
+        var line = "\(name) | " + String(format: "%.6f, %.6f", b.lat, b.long)
+        if b.date > 0 { line += " | " + lineDateFormatter.string(from: Date(timeIntervalSince1970: b.date)) }
+        lines.append(line)
+    }
+    return lines.joined(separator: "\n") + "\n"
+}
+
+/// Writes the export to a temporary .txt file (ASCII file name) and returns its URL.
+func exportFile(_ list: LocList, _ items: [Bookmark]) -> URL? {
+    let stamp = DateFormatter()
+    stamp.dateFormat = "yyyyMMdd-HHmm"
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("LocationSimulator-\(list.fileTag)-\(stamp.string(from: Date())).txt")
+    do {
+        try exportText(list, items).write(to: url, atomically: true, encoding: .utf8)
+        return url
+    } catch { return nil }
+}
+
+private let coordRegex = try! NSRegularExpression(pattern: #"(-?\d{1,3}(?:\.\d+)?)\s*[,;\s]\s*(-?\d{1,3}(?:\.\d+)?)"#)
+
+private func parseCoord(_ s: String) -> (Double, Double)? {
+    let ns = s as NSString
+    guard let m = coordRegex.firstMatch(in: s, range: NSRange(location: 0, length: ns.length)),
+          let la = Double(ns.substring(with: m.range(at: 1))),
+          let lo = Double(ns.substring(with: m.range(at: 2))),
+          (-90...90).contains(la), (-180...180).contains(lo) else { return nil }
+    return (la, lo)
+}
+
+func parseText(_ text: String) -> [Bookmark] {
+    var result: [Bookmark] = []
+    for rawLine in text.components(separatedBy: .newlines) {
+        let line = rawLine.trimmingCharacters(in: .whitespaces)
+        if line.isEmpty || line.hasPrefix("#") { continue }
+        let parts = line.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+        var name = "", coordPart = line, date: Double = 0
+        if parts.count >= 2 {
+            name = parts[0]
+            coordPart = parts[1]
+            if parts.count >= 3, let d = lineDateFormatter.date(from: parts[2]) { date = d.timeIntervalSince1970 }
+        }
+        guard let (la, lo) = parseCoord(coordPart) else { continue }
+        if name.caseInsensitiveCompare("Unnamed") == .orderedSame { name = "" }
+        result.append(Bookmark(name: name, lat: la, long: lo, date: date))
+    }
+    return result
 }
 
 // MARK: - Mika's LocSim import
 
-func isThereAnyMika() -> Bool {
-    let plistPath = "/var/mobile/Library/Preferences/com.mika.LocationSimulation.plist"
-    guard FileManager.default.fileExists(atPath: plistPath),
-          let data = try? Data(contentsOf: URL(fileURLWithPath: plistPath)),
-          let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
-    else { return false }
-    return plist["datas"] is [Any]
-}
+private let mikaPlist = "/var/mobile/Library/Preferences/com.mika.LocationSimulation.plist"
 
-func importMika() {
-    let plistPath = "/var/mobile/Library/Preferences/com.mika.LocationSimulation.plist"
-    guard let data = try? Data(contentsOf: URL(fileURLWithPath: plistPath)),
+func mikaLocations() -> [Bookmark] {
+    guard let data = try? Data(contentsOf: URL(fileURLWithPath: mikaPlist)),
           let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
-          let datasArray = plist["datas"] as? [[String: Any]]
-    else { return }
-
-    var bookmarks = loadBookmarks()
-    for dataDict in datasArray {
-        if let la = (dataDict["la"] as? NSNumber)?.doubleValue,
-           let lo = (dataDict["lo"] as? NSNumber)?.doubleValue {
-            bookmarks.append(Bookmark(name: dataDict["remark"] as? String ?? "", lat: la, long: lo, date: 0))
-        }
+          let datas = plist["datas"] as? [[String: Any]] else { return [] }
+    return datas.compactMap { d in
+        guard let la = (d["la"] as? NSNumber)?.doubleValue, let lo = (d["lo"] as? NSNumber)?.doubleValue else { return nil }
+        return Bookmark(name: d["remark"] as? String ?? "", lat: la, long: lo, date: 0)
     }
-    saveBookmarks(bookmarks)
-    UIApplication.shared.alert(title: "Xong!", body: "Đã nhập các vị trí đã lưu từ LocSim của Mika.")
 }

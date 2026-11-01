@@ -12,24 +12,83 @@ import AlertKit
 import PhotosUI
 import UIKit
 
+enum MainTab: String, CaseIterable, Identifiable {
+    case map, history, bookmarks
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .map: return "Bản đồ"
+        case .history: return "Lịch sử"
+        case .bookmarks: return "Đánh dấu"
+        }
+    }
+}
+
 struct LocSimView: View {
-    @State private var altitude: String = "0.0"
+    @AppStorage("locAltitude") private var altitude: String = "0"
+    @State private var tab: MainTab = .map
     @State private var centerCoordinate: CLLocationCoordinate2D? = nil
     @State private var recenterTick = 0
     @State private var focusCoordinate: EquatableCoordinate? = nil
-    @State private var bookmarkSheet = false
     @State private var isFaking = false
-    @State private var customizeSheet = false
+    @State private var settingsSheet = false
 
     var body: some View {
-        if #available(iOS 16.0, *) {
-            NavigationStack { main }
-        } else {
-            NavigationView { main }.navigationViewStyle(.stack)
+        NavigationView {
+            ZStack {
+                mapLayer                                  // kept alive so the map keeps its position
+                if tab != .map {
+                    LocationListView(list: tab == .history ? .history : .bookmarks,
+                                     onStart: { item in
+                                         fake(wgs: item.coordinate)
+                                         showOnMap(item)
+                                     },
+                                     onShowOnMap: { item in showOnMap(item) })
+                        .id(tab)
+                        .background(Color(.systemBackground).ignoresSafeArea())
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: stop) {
+                        Image(systemName: "location.slash")
+                            .font(.title3)
+                            .foregroundColor(isFaking ? .red : .secondary)
+                    }
+                }
+                ToolbarItem(placement: .principal) {
+                    Picker("", selection: $tab) {
+                        ForEach(MainTab.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 250)
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { settingsSheet = true } label: {
+                        Image(systemName: "gearshape").font(.title3)
+                    }
+                }
+            }
+            .sheet(isPresented: $settingsSheet) {
+                CustomizeAppView(onFakeCoordinate: { typed in
+                    fake(wgs: CoordTransform.gcj02ToWgs84(typed))
+                    focus(typed)
+                    tab = .map
+                })
+            }
+        }
+        .navigationViewStyle(.stack)
+        .onAppear {
+            LocationModel().requestAuthorisation()
+            CLLocationManager().requestAlwaysAuthorization()
+            AppCustomizer.restoreIconIfNeeded()
         }
     }
 
-    private var main: some View {
+    // MARK: - Map tab
+
+    private var mapLayer: some View {
         ZStack {
             CustomMapView(centerCoordinate: $centerCoordinate,
                           recenterTick: recenterTick,
@@ -38,90 +97,45 @@ struct LocSimView: View {
 
             CenterPin()
 
-            VStack {
+            VStack(spacing: 10) {
                 Spacer()
-                bottomPanel
-            }
-        }
-        .ignoresSafeArea(.keyboard)
-        .onAppear {
-            LocationModel().requestAuthorisation()
-            CLLocationManager().requestAlwaysAuthorization()
-            AppCustomizer.restoreIconIfNeeded()
-        }
-        .sheet(isPresented: $customizeSheet) {
-            CustomizeAppView()
-        }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                Text("Location Simulator").font(.headline)
-            }
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                Button(action: enterCoordinates) {
-                    Image(systemName: "number")
-                }
-                Button(action: setAltitude) {
-                    Image(systemName: "mountain.2.fill")
-                }
-                Button { bookmarkSheet = true } label: {
-                    Image(systemName: "list.star")
-                }
-                Button { customizeSheet = true } label: {
-                    Image(systemName: "gearshape")
-                }
-            }
-        }
-        .sheet(isPresented: $bookmarkSheet) {
-            BookMarkSlider { bookmark in
-                let coord = CLLocationCoordinate2D(latitude: bookmark.lat, longitude: bookmark.long)
-                fake(wgs: coord, save: false)
-                // Show it on the map (map uses GCJ in China, WGS elsewhere).
-                focusCoordinate = EquatableCoordinate(coordinate: CoordTransform.wgs84ToGcj02(coord))
-            }
-        }
-    }
-
-    // MARK: - Bottom panel
-
-    private var bottomPanel: some View {
-        VStack(spacing: 10) {
-            HStack {
                 Text(coordinateText)
-                    .font(.caption.monospacedDigit())
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                Spacer()
-                Button {
-                    recenterTick += 1
-                } label: {
-                    Image(systemName: "location.fill")
-                        .padding(8)
-                        .background(Circle().fill(Color(.systemBackground)))
+                    .font(.footnote.monospacedDigit())
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(.ultraThinMaterial))
+                    .onTapGesture {
+                        UIPasteboard.general.string = coordinateText
+                        AlertKitAPI.present(title: "Đã sao chép toạ độ", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+                    }
+                HStack(alignment: .bottom) {
+                    // Start: round red "play" button
+                    Button(action: startAtPin) {
+                        ZStack {
+                            Circle().fill(Color(red: 1, green: 0, blue: 0))
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 28, weight: .bold))
+                                .foregroundColor(.white)
+                                .offset(x: 3)
+                        }
+                        .frame(width: 68, height: 68)
+                        .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
+                    }
+                    Spacer()
+                    // Go to my real location
+                    Button { recenterTick += 1 } label: {
+                        Image(systemName: "location")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundColor(.accentColor)
+                            .frame(width: 54, height: 54)
+                            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color(.systemBackground)))
+                            .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+                    }
                 }
-            }
-
-            HStack(spacing: 10) {
-                Button(action: startAtPin) {
-                    Label("Bắt đầu", systemImage: "play.fill")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 48)
-                        .background(RoundedRectangle(cornerRadius: 12).fill(Color.accentColor))
-                        .foregroundColor(.white)
-                }
-                Button(action: stop) {
-                    Label("Dừng", systemImage: "stop.fill")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 48)
-                        .background(RoundedRectangle(cornerRadius: 12).fill(isFaking ? Color.red : Color.gray.opacity(0.6)))
-                        .foregroundColor(.white)
-                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 24)
             }
         }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .padding(.horizontal, 12)
-        .padding(.bottom, 8)
     }
 
     private var coordinateText: String {
@@ -136,59 +150,34 @@ struct LocSimView: View {
             UIApplication.shared.alert(body: "Bản đồ chưa sẵn sàng, thử lại sau giây lát.")
             return
         }
-        // Map coordinates are GCJ-02 inside China, WGS-84 elsewhere; convert to real GPS.
-        fake(wgs: CoordTransform.gcj02ToWgs84(center), save: true)
+        fake(wgs: CoordTransform.gcj02ToWgs84(center))   // only changes anything inside mainland China
     }
 
-    private func fake(wgs: CLLocationCoordinate2D, save: Bool) {
-        let alt = Double(altitude) ?? 0.0
-        let location = CLLocation(coordinate: wgs, altitude: alt,
+    /// Fakes the location and logs it in History.
+    private func fake(wgs: CLLocationCoordinate2D) {
+        let location = CLLocation(coordinate: wgs, altitude: Double(altitude) ?? 0,
                                   horizontalAccuracy: 5, verticalAccuracy: 5, timestamp: Date())
         LocSimManager.startLocSim(location: location)
         isFaking = true
-        if save {
-            autoSaveFakedLocation(lat: wgs.latitude, long: wgs.longitude)
-        }
-        AlertKitAPI.present(title: save ? "Đã bắt đầu & đã lưu" : "Đã bắt đầu",
-                            icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        logToHistory(lat: wgs.latitude, long: wgs.longitude)
+        AlertKitAPI.present(title: "Đã bắt đầu fake", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+    }
+
+    private func showOnMap(_ item: Bookmark) {
+        focus(CoordTransform.wgs84ToGcj02(item.coordinate))
+        tab = .map
+    }
+
+    /// Moves the map (resets first so the same spot can be shown again).
+    private func focus(_ c: CLLocationCoordinate2D) {
+        focusCoordinate = nil
+        DispatchQueue.main.async { focusCoordinate = EquatableCoordinate(coordinate: c) }
     }
 
     private func stop() {
         LocSimManager.stopLocSim()
         isFaking = false
-        AlertKitAPI.present(title: "Đã dừng", icon: .done, style: .iOS17AppleMusic, haptic: .success)
-    }
-
-    private func enterCoordinates() {
-        UIApplication.shared.TextFieldAlert(
-            title: "Nhập toạ độ",
-            message: "Vị trí sẽ được fake và lưu lại.",
-            textFieldPlaceHolder: "Vĩ độ (latitude)",
-            secondTextFieldPlaceHolder: "Kinh độ (longitude)"
-        ) { latText, longText in
-            let clean: (String?) -> Double? = { Double(($0 ?? "").replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)) }
-            guard let la = clean(latText), let lo = clean(longText),
-                  (-90...90).contains(la), (-180...180).contains(lo) else {
-                UIApplication.shared.alert(body: "Toạ độ không hợp lệ.")
-                return
-            }
-            let typed = CLLocationCoordinate2D(latitude: la, longitude: lo)
-            fake(wgs: CoordTransform.gcj02ToWgs84(typed), save: true)
-            focusCoordinate = EquatableCoordinate(coordinate: typed)
-        }
-    }
-
-    private func setAltitude() {
-        UIApplication.shared.TextFieldAlert(
-            title: "Độ cao",
-            message: "Nhập độ cao (mét).",
-            textFieldPlaceHolder: "Độ cao (m)"
-        ) { altitudeText, _ in
-            if let t = altitudeText, Double(t) != nil {
-                altitude = t
-                AlertKitAPI.present(title: "Đã đặt độ cao", icon: .done, style: .iOS17AppleMusic, haptic: .success)
-            }
-        }
+        AlertKitAPI.present(title: "Đã dừng fake", icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
 }
 
@@ -399,6 +388,10 @@ enum AppCustomizer {
 
 struct CustomizeAppView: View {
     @Environment(\.dismiss) var dismiss
+    var onFakeCoordinate: ((CLLocationCoordinate2D) -> Void)? = nil
+    @AppStorage("locAltitude") private var altitude: String = "0"
+    @State private var manualLat = ""
+    @State private var manualLong = ""
     @State private var choice = AppIconChoice(rawValue: AppCustomizer.storedChoice) ?? .d
     @State private var name = AppCustomizer.currentDisplayName
     @State private var originalName = AppCustomizer.currentDisplayName
@@ -463,6 +456,29 @@ struct CustomizeAppView: View {
                 }
 
                 Section {
+                    TextField("Vĩ độ (latitude)", text: $manualLat).keyboardType(.numbersAndPunctuation)
+                    TextField("Kinh độ (longitude)", text: $manualLong).keyboardType(.numbersAndPunctuation)
+                    Button("Bắt đầu fake toạ độ này") { fakeManual() }
+                } header: {
+                    Text("Fake theo toạ độ")
+                } footer: {
+                    Text("Có thể dán cả cặp \"21.05, 105.91\" vào ô Vĩ độ.")
+                }
+
+                Section {
+                    HStack {
+                        Text("Độ cao (m)")
+                        Spacer()
+                        TextField("0", text: $altitude)
+                            .keyboardType(.numbersAndPunctuation)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 100)
+                    }
+                } header: {
+                    Text("Độ cao")
+                }
+
+                Section {
                     Button("Khôi phục mặc định", role: .destructive) {
                         UIApplication.shared.confirmAlert(title: "Khôi phục mặc định?",
                                                           body: "Tên về \"Location Simulator\", biểu tượng về mẫu Ghim đôi.",
@@ -474,7 +490,7 @@ struct CustomizeAppView: View {
                     }
                 }
             }
-            .navigationTitle("Tuỳ chỉnh app")
+            .navigationTitle("Cài đặt")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -499,6 +515,18 @@ struct CustomizeAppView: View {
                 }
             }
         }
+    }
+
+    private func fakeManual() {
+        let clean: (String) -> String = { $0.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces) }
+        var la = Double(clean(manualLat)), lo = Double(clean(manualLong))
+        if lo == nil, let pair = parseText(manualLat).first { la = pair.lat; lo = pair.long }   // pasted "lat, long"
+        guard let la, let lo, (-90...90).contains(la), (-180...180).contains(lo) else {
+            UIApplication.shared.alert(body: "Toạ độ không hợp lệ.")
+            return
+        }
+        dismiss()
+        onFakeCoordinate?(CLLocationCoordinate2D(latitude: la, longitude: lo))
     }
 
     private func applyChanges() {

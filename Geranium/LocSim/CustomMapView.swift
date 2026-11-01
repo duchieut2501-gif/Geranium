@@ -34,6 +34,7 @@ struct CustomMapView: UIViewRepresentable {
                 mapView.setRegion(MKCoordinateRegion(center: loc, latitudinalMeters: 600, longitudinalMeters: 600), animated: true)
             }
         }
+        if focusCoordinate == nil { c.lastFocus = nil }
         if let focus = focusCoordinate, focus != c.lastFocus {
             c.lastFocus = focus
             mapView.setCenter(focus.coordinate, animated: true)
