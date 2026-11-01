@@ -72,6 +72,7 @@ struct LocSimView: View {
     @State private var placesTab: PlacesTab = .bookmarks
     @State private var zoomLevel: Double = 0.5           // 0 = far out (top), 1 = close in (bottom)
     @State private var zoomRequest: ZoomRequest? = nil
+    @State private var savePin: PlaceEdit? = nil
     @AppStorage("textSize") private var textSize: String = TextSizeOption.small.rawValue
 
     var body: some View {
@@ -142,6 +143,18 @@ struct LocSimView: View {
     // MARK: - Map tab
 
     private var mapLayer: some View {
+        mapContent
+            .sheet(item: $savePin) { edit in
+                PlaceEditView(edit: edit, folders: loadFolders()) { r in
+                    let added = addToBookmarks(name: r.name, lat: r.lat, long: r.long, folder: r.folder)
+                    AlertKitAPI.present(title: added ? "Đã lưu vào Đánh dấu" : "Đã cập nhật trong Đánh dấu",
+                                        icon: .done, style: .iOS17AppleMusic, haptic: .success)
+                }
+                .dynamicTypeSize((TextSizeOption(rawValue: textSize) ?? .small).dynamicType)
+            }
+    }
+
+    private var mapContent: some View {
         ZStack {
             CustomMapView(centerCoordinate: $centerCoordinate,
                           recenterTick: recenterTick,
@@ -193,14 +206,25 @@ struct LocSimView: View {
                         .animation(.easeInOut(duration: 0.2), value: isFaking)
                     }
                     Spacer()
+                    VStack(spacing: 10) {
+                    // Save the pin position to Bookmarks
+                    Button { savePinToBookmarks() } label: {
+                        Image(systemName: "star")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundColor(.orange)
+                            .frame(width: 48, height: 48)
+                            .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Color(.systemBackground)))
+                            .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+                    }
                     // Go to my real location
                     Button { recenterTick += 1 } label: {
                         Image(systemName: "location")
                             .font(.system(size: 22, weight: .semibold))
                             .foregroundColor(.accentColor)
-                            .frame(width: 54, height: 54)
+                            .frame(width: 48, height: 48)
                             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color(.systemBackground)))
                             .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+                    }
                     }
                 }
                 .padding(.horizontal, 20)
@@ -232,6 +256,12 @@ struct LocSimView: View {
         isFaking = true
         logToHistory(lat: wgs.latitude, long: wgs.longitude)
         AlertKitAPI.present(title: "Đã bắt đầu giả lập", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+    }
+
+    private func savePinToBookmarks() {
+        guard let center = centerCoordinate, CLLocationCoordinate2DIsValid(center) else { return }
+        let wgs = CoordTransform.gcj02ToWgs84(center)
+        savePin = PlaceEdit(mode: .newBookmark, list: .bookmarks, item: Bookmark(name: "", lat: wgs.latitude, long: wgs.longitude))
     }
 
     private func showOnMap(_ item: Bookmark) {
