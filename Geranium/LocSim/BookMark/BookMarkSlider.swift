@@ -62,9 +62,7 @@ struct LocationListView: View {
             }
             .listStyle(.plain)
             .environment(\.defaultMinListRowHeight, 36)
-            .simultaneousGesture(DragGesture(minimumDistance: 12).onChanged { _ in
-                if searchFocused { searchFocused = false; hideKeyboard() }   // scrolling hides keyboard
-            })
+            .modifier(DismissKeyboardOnScroll())
             .overlay(emptyState, alignment: .center)
         }
         .onAppear { reload() }
@@ -202,16 +200,10 @@ struct LocationListView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(Color(.tertiaryLabel))
             }
-            .contentShape(Rectangle())
-            .onLongPressGesture(minimumDuration: 0.35) {
-                searchFocused = false
-                hideKeyboard()
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                selected = item
-                showMenu = true
-            }
         }
         .padding(.leading, indent ? 22 : 0)
+        .contentShape(Rectangle())
+        .contextMenu { placeMenu(item) }
         .listRowInsets(EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14))
         .swipeActions(edge: .trailing) {
             Button(role: .destructive) { remove(item) } label: { Label(L("Xoá", "Delete"), systemImage: "trash") }
@@ -224,6 +216,24 @@ struct LocationListView: View {
                 .tint(.yellow)
             }
         }
+    }
+
+    @ViewBuilder
+    private func placeMenu(_ item: Bookmark) -> some View {
+        Button { onStart(item); reload() } label: { Label(L("Giả lập vị trí này", "Simulate this location"), systemImage: "location.fill") }
+        Button { onShowOnMap(item) } label: { Label(L("Đặt vị trí này lên bản đồ", "Show on map"), systemImage: "map") }
+        Button { openEdit(PlaceEdit(mode: .edit, list: list, item: item)) } label: { Label(L("Sửa vị trí", "Edit location"), systemImage: "pencil") }
+        if list == .bookmarks {
+            Button { setFavorite(id: item.id, !item.favorite) } label: {
+                Label(item.favorite ? L("Bỏ khỏi Yêu thích", "Remove from Favourites") : L("Thêm vào Yêu thích", "Add to Favourites"),
+                      systemImage: item.favorite ? "star.slash" : "star")
+            }
+        } else {
+            Button { openEdit(PlaceEdit(mode: .newBookmark, list: .bookmarks, item: item)) } label: {
+                Label(L("Thêm vào Đánh dấu", "Add to Bookmarks"), systemImage: "bookmark")
+            }
+        }
+        Button(role: .destructive) { remove(item) } label: { Label(L("Xoá", "Delete"), systemImage: "trash") }
     }
 
     /// The place currently being simulated (within 5 m).
@@ -349,7 +359,7 @@ struct LocationListView: View {
                     ForEach(BookmarkSort.allCases) { Text($0.label).tag($0.rawValue) }
                 }
             } label: {
-                Image(systemName: "line.3.horizontal.decrease.circle").font(.system(size: 18))
+                Image(systemName: "line.3.horizontal.decrease.circle").font(.system(size: 27)).frame(width: 40, height: 40)
             }
 
             Menu {
@@ -363,7 +373,7 @@ struct LocationListView: View {
                 Button { showImporter = true } label: { Label(L("Nhập từ file", "Import from file"), systemImage: "square.and.arrow.down") }
                 Button { showPaste = true } label: { Label(L("Dán văn bản", "Paste text"), systemImage: "doc.on.clipboard") }
             } label: {
-                Image(systemName: "ellipsis.circle").font(.system(size: 18))
+                Image(systemName: "ellipsis.circle").font(.system(size: 27)).frame(width: 40, height: 40)
             }
         }
         .padding(.horizontal, 12)
@@ -577,7 +587,7 @@ struct FolderEditView: View {
                     .listRowInsets(EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14))
                 }
                 .listStyle(.plain)
-                .simultaneousGesture(DragGesture(minimumDistance: 12).onChanged { _ in hideKeyboard() })
+                .modifier(DismissKeyboardOnScroll())
                 .overlay(Group {
                     if items.isEmpty {
                         Text(L("Chưa có địa điểm nào trong Đánh dấu.", "There are no places in Bookmarks yet.")).foregroundColor(.secondary).padding()
@@ -763,6 +773,17 @@ struct PasteImportView: View {
                     .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
+        }
+    }
+}
+
+/// Hides the keyboard when the list is scrolled, without blocking the scroll.
+struct DismissKeyboardOnScroll: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 16.0, *) {
+            content.scrollDismissesKeyboard(.immediately)
+        } else {
+            content
         }
     }
 }
