@@ -180,6 +180,20 @@ func renameFolder(_ old: String, to new: String) {
     saveList(.bookmarks, items)
 }
 
+/// Creates or edits a list in one go: optional rename, then the places with `memberIDs` are put in it,
+/// and places that were in it but are no longer ticked are moved out (not deleted).
+func saveFolder(original: String?, name: String, memberIDs: Set<String>) {
+    let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !n.isEmpty else { return }
+    if let old = original, old != n { renameFolder(old, to: n) } else { createFolder(n) }
+    var items = loadList(.bookmarks)
+    for i in items.indices {
+        if memberIDs.contains(items[i].id) { items[i].folder = n }
+        else if items[i].folder == n { items[i].folder = "" }
+    }
+    saveList(.bookmarks, items)
+}
+
 /// Deletes the list. Places inside are kept and moved out of the list.
 func deleteFolder(_ name: String) {
     saveFolders((store?.array(forKey: foldersKey) as? [String] ?? []).filter { $0 != name })

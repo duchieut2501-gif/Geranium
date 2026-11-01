@@ -38,6 +38,7 @@ struct LocationListView: View {
     @State private var showImporter = false
     @State private var showPaste = false
     @State private var editing: PlaceEdit? = nil
+    @State private var folderEdit: FolderEdit? = nil
     @FocusState private var searchFocused: Bool
 
     private var sortRaw: Binding<String> { list == .history ? $sortHistory : $sortBookmarks }
@@ -86,6 +87,14 @@ struct LocationListView: View {
                 save(edit, result)
             }
         }
+        .background(
+            EmptyView().sheet(item: $folderEdit) { fe in
+                FolderEditView(original: fe.original) { newName in
+                    if openFolder != nil, openFolder == fe.original { openFolder = newName }
+                    reload()
+                }
+            }
+        )
         .sheet(isPresented: $showPaste) {
             PasteImportView(title: list.title) { text in importText(text) }
         }
@@ -219,10 +228,10 @@ struct LocationListView: View {
         .listRowInsets(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
         .swipeActions(edge: .trailing) {
             Button(role: .destructive) { askDeleteFolder(folder) } label: { Label("Xoá", systemImage: "trash") }
-            Button { askRenameFolder(folder) } label: { Label("Đổi tên", systemImage: "pencil") }.tint(.orange)
+            Button { askRenameFolder(folder) } label: { Label("Sửa", systemImage: "pencil") }.tint(.orange)
         }
         .contextMenu {
-            Button { askRenameFolder(folder) } label: { Label("Đổi tên danh sách", systemImage: "pencil") }
+            Button { askRenameFolder(folder) } label: { Label("Sửa danh sách", systemImage: "pencil") }
             Button(role: .destructive) { askDeleteFolder(folder) } label: { Label("Xoá danh sách", systemImage: "trash") }
         }
     }
@@ -355,18 +364,13 @@ struct LocationListView: View {
     }
 
     private func askNewFolder() {
-        textPrompt(title: "Tạo danh sách mới", placeholder: "Tên danh sách", text: "") { name in
-            createFolder(name)
-            reload()
-        }
+        searchFocused = false
+        folderEdit = FolderEdit(original: nil)
     }
 
     private func askRenameFolder(_ folder: String) {
-        textPrompt(title: "Đổi tên danh sách", placeholder: "Tên danh sách", text: folder) { name in
-            renameFolder(folder, to: name)
-            if openFolder == folder { openFolder = name.trimmingCharacters(in: .whitespacesAndNewlines) }
-            reload()
-        }
+        searchFocused = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { folderEdit = FolderEdit(original: folder) }
     }
 
     private func askDeleteFolder(_ folder: String) {
@@ -421,6 +425,118 @@ struct LocationListView: View {
         reload()
         UIApplication.shared.alert(title: "Đã nhập vào \(list.title)",
                                    body: "Thêm \(added) vị trí" + (found.count > added ? ", bỏ qua \(found.count - added) vị trí trùng." : "."))
+    }
+}
+
+struct FolderEdit: Identifiable {
+    let id = UUID()
+    var original: String?      // nil = new list
+}
+
+/// Create / edit a list: name + tick the places that belong to it.
+struct FolderEditView: View {
+    @Environment(\.dismiss) var dismiss
+    let original: String?
+    var onSaved: (String) -> Void
+
+    @State private var name = ""
+    @State private var items: [Bookmark] = []
+    @State private var picked: Set<String> = []
+    @State private var search = ""
+    @State private var didLoad = false
+
+    private var shown: [Bookmark] { filterAndSort(items, search: search, sort: .az) }
+    private var allShownPicked: Bool { !shown.isEmpty && shown.allSatisfy { picked.contains($0.id) } }
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                VStack(spacing: 8) {
+                    TextField("Tên danh sách", text: $name)
+                        .font(.body.weight(.semibold))
+                        .padding(9)
+                        .background(RoundedRectangle(cornerRadius: 9).fill(Color(.secondarySystemBackground)))
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass").foregroundColor(.secondary)
+                        TextField("Tìm địa điểm để thêm", text: $search).disableAutocorrection(true)
+                        if !search.isEmpty {
+                            Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundColor(.secondary) }
+                        }
+                    }
+                    .padding(7)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(Color(.secondarySystemBackground)))
+                    HStack {
+                        Text("Đã chọn \(picked.count)").font(.footnote).foregroundColor(.secondary)
+                        Spacer()
+                        Button(allShownPicked ? "Bỏ chọn tất cả" : "Chọn tất cả") {
+                            if allShownPicked { shown.forEach { picked.remove($0.id) } }
+                            else { shown.forEach { picked.insert($0.id) } }
+                        }
+                        .font(.footnote.weight(.semibold))
+                        .disabled(shown.isEmpty)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+
+                List(shown) { item in
+                    Button {
+                        if picked.contains(item.id) { picked.remove(item.id) } else { picked.insert(item.id) }
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: picked.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 21))
+                                .foregroundColor(picked.contains(item.id) ? .accentColor : Color(.tertiaryLabel))
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(item.displayName)
+                                    .foregroundColor(item.isUnnamed ? .secondary : .primary)
+                                    .lineLimit(2)
+                                if !item.folder.isEmpty && item.folder != original {
+                                    Text("📁 \(item.folder)").font(.footnote).foregroundColor(.secondary)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14))
+                }
+                .listStyle(.plain)
+                .simultaneousGesture(DragGesture(minimumDistance: 12).onChanged { _ in hideKeyboard() })
+                .overlay(Group {
+                    if items.isEmpty {
+                        Text("Chưa có địa điểm nào trong Đánh dấu.").foregroundColor(.secondary).padding()
+                    }
+                })
+            }
+            .navigationTitle(original == nil ? "Tạo danh sách" : "Sửa danh sách")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) { Button("Huỷ") { dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Lưu") { save() }
+                        .font(.body.weight(.semibold))
+                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .onAppear {
+                guard !didLoad else { return }
+                didLoad = true
+                items = loadList(.bookmarks)
+                name = original ?? ""
+                if let o = original { picked = Set(items.filter { $0.folder == o }.map { $0.id }) }
+            }
+        }
+    }
+
+    private func save() {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        saveFolder(original: original, name: n, memberIDs: picked)
+        AlertKitAPI.present(title: original == nil ? "Đã tạo danh sách" : "Đã lưu danh sách",
+                            icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        dismiss()
+        onSaved(n)
     }
 }
 
