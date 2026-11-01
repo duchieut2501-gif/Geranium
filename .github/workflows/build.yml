@@ -1,0 +1,34 @@
+name: Build LocSim .tipa
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick Xcode
+        run: |
+          ls /Applications | grep -i xcode
+          XC=$(ls -d /Applications/Xcode_15.4.app 2>/dev/null || ls -d /Applications/Xcode_15*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Build
+        run: |
+          chmod +x ipabuild.sh
+          ./ipabuild.sh
+
+      - name: Upload .tipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocSim-tipa
+          path: build/Geranium.tipa
+          if-no-files-found: error

@@ -22,20 +22,13 @@ fi
 # Build .app
 xcodebuild -project "$WORKING_LOCATION/$APPLICATION_NAME.xcodeproj" \
     -scheme Geranium \
-    -configuration Debug \
+    -configuration "$CONFIGURATION" \
+    -skipPackagePluginValidation \
+    -skipMacroValidation \
     -derivedDataPath "$WORKING_LOCATION/build/DerivedData" \
     -destination 'generic/platform=iOS' \
     ONLY_ACTIVE_ARCH="NO" \
-    CODE_SIGNING_ALLOWED="NO" \
-    
-# Build helper
-# xcodebuild -project "$WORKING_LOCATION/$APPLICATION_NAME.xcodeproj" \
-#     -scheme RootHelper \
-#     -configuration Debug \
-#     -derivedDataPath "$WORKING_LOCATION/build/DerivedData" \
-#     -destination 'generic/platform=iOS' \
-#     ONLY_ACTIVE_ARCH="NO" \
-#     CODE_SIGNING_ALLOWED="NO" \
+    CODE_SIGNING_ALLOWED="NO"
 
 DD_APP_PATH="$WORKING_LOCATION/build/DerivedData/Build/Products/$CONFIGURATION-iphoneos/$APPLICATION_NAME.app"
 TARGET_APP="$WORKING_LOCATION/build/$APPLICATION_NAME.app"
@@ -50,12 +43,7 @@ if [ -e "$TARGET_APP/embedded.mobileprovision" ]; then
     rm -rf "$TARGET_APP/embedded.mobileprovision"
 fi
 
-git submodule update --init --recursive
-cd $WORKING_LOCATION/RootHelper
-make clean
-make
-cp $WORKING_LOCATION/RootHelper/.theos/obj/debug/GeraniumRootHelper $WORKING_LOCATION/build/Geranium.app/GeraniumRootHelper
-cd -
+# RootHelper is not needed for location simulation only -> skipped (no Theos required).
 
 #cp $WORKING_LOCATION/build/DerivedData/Build/Products/$CONFIGURATION-iphoneos/RootHelper $WORKING_LOCATION/build/Geranium.app/RootHelper
 

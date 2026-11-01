@@ -58,7 +58,7 @@ class ActionViewController: UIViewController {
     let sharedUserDefaultsSuiteName = "group.live.cclerc.geraniumBookmarks"
 
     func BookMarkSave(lat: Double, long: Double, name: String) -> Bool {
-        let bookmark: [String: Any] = ["name": name, "lat": lat, "long": long]
+        let bookmark: [String: Any] = ["id": UUID().uuidString, "name": name, "lat": lat, "long": long, "date": Date().timeIntervalSince1970]
         var bookmarks = BookMarkRetrieve()
         bookmarks.append(bookmark)
         let sharedUserDefaults = UserDefaults(suiteName: sharedUserDefaultsSuiteName)
