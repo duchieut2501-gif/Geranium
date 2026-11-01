@@ -86,9 +86,38 @@ struct CoordTransform {
     }
 
     /// Checks if a coordinate is outside of mainland China.
+    /// The old single bounding box also covered Vietnam, Laos, Thailand, Korea, Japan...
+    /// which shifted faked locations there by a few hundred metres. Use region rectangles instead.
+    private static let chinaRegions: [(minLon: Double, minLat: Double, maxLon: Double, maxLat: Double)] = [
+        (79.446200, 42.889900, 96.330000, 49.220400),
+        (109.687200, 39.374200, 135.000200, 54.141500),
+        (73.124600, 29.529700, 124.143255, 42.889900),
+        (82.968400, 26.718600, 97.035200, 29.529700),
+        (97.025300, 20.414096, 124.367395, 29.529700),
+        (107.975793, 17.871542, 111.744104, 20.414096),
+    ]
+    private static let excludedRegions: [(minLon: Double, minLat: Double, maxLon: Double, maxLat: Double)] = [
+        (119.921265, 21.785006, 122.497559, 25.398623), // Taiwan
+        (101.865200, 20.098800, 106.665000, 22.284000), // Northern Vietnam / Laos
+        (106.452500, 20.487800, 108.051000, 21.542200), // Northern Vietnam (coast)
+        (102.140000, 20.098800, 105.300000, 22.400000), // Northern Vietnam (west)
+        (103.200000, 22.284000, 104.150000, 22.490000), // Lao Cai
+        (104.150000, 22.284000, 105.300000, 22.850000), // Ha Giang
+        (105.300000, 22.284000, 106.700000, 22.800000), // Cao Bang / Ha Giang (south part)
+        (106.700000, 21.542200, 107.350000, 22.000000), // Lang Son / Quang Ninh
+        (109.032300, 50.325700, 119.127000, 55.817500), // Mongolia / Russia
+        (127.456800, 49.557400, 137.022700, 55.817500), // Russia
+        (131.266200, 42.569200, 137.022700, 44.892200), // Russia
+        (124.500000, 37.400000, 131.000000, 43.000000), // Korea
+    ]
+
     private static func isOutOfChina(_ coordinate: CLLocationCoordinate2D) -> Bool {
-        return coordinate.longitude < 72.004 || coordinate.longitude > 137.847
-            || coordinate.latitude < 0.8293 || coordinate.latitude > 55.8271
+        func inside(_ r: (minLon: Double, minLat: Double, maxLon: Double, maxLat: Double)) -> Bool {
+            coordinate.longitude >= r.minLon && coordinate.longitude <= r.maxLon
+                && coordinate.latitude >= r.minLat && coordinate.latitude <= r.maxLat
+        }
+        guard chinaRegions.contains(where: inside) else { return true }
+        return excludedRegions.contains(where: inside)
     }
 
     private static func transformLatitude(x: Double, y: Double) -> Double {
