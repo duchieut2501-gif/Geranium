@@ -23,6 +23,8 @@ struct CustomMapView: UIViewRepresentable {
         mapView.showsUserLocation = true
         mapView.showsCompass = true
         mapView.pointOfInterestFilter = .includingAll
+        // Allow zooming in closer than the default limit.
+        mapView.setCameraZoomRange(MKMapView.CameraZoomRange(minCenterCoordinateDistance: 15), animated: false)
         return mapView
     }
 
@@ -82,11 +84,11 @@ struct CenterPin: View {
                     .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
                 Rectangle()
                     .fill(Color.red)
-                    .frame(width: 1.5, height: 34)   // 1-2 px needle
+                    .frame(width: 1.5, height: 23)   // 1-2 px needle
             }
             .shadow(color: .black.opacity(0.35), radius: 1, x: 0, y: 0.5)
             // Lift the needle so its tip sits exactly on the centre point.
-            .offset(y: -23)
+            .offset(y: -17.5)
 
             // Tiny dot marking the exact point.
             Circle()
