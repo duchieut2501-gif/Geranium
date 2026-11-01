@@ -92,7 +92,7 @@ struct LocSimView: View {
                         LocationListView(list: placesTab.list,
                                          onStart: { item in
                                              fake(wgs: item.coordinate)
-                                             showOnMap(item)
+                                             focus(CoordTransform.wgs84ToGcj02(item.coordinate))   // map follows, tab stays
                                          },
                                          onShowOnMap: { item in showOnMap(item) })
                             .id(placesTab)
@@ -168,6 +168,24 @@ struct LocSimView: View {
 
             CenterPin()
 
+            // Enter coordinates: top-right, under the settings button (away from Play)
+            VStack {
+                HStack {
+                    Spacer()
+                    Button(action: enterCoordinates) {
+                        Image(systemName: "keyboard")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundColor(.accentColor)
+                            .frame(width: 44, height: 44)
+                            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.systemBackground)))
+                            .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+                    }
+                    .padding(.trailing, 10)
+                    .padding(.top, 10)
+                }
+                Spacer()
+            }
+
             // Vertical zoom slider at the right edge: drag down = zoom in, up = zoom out. Centre stays put.
             HStack {
                 Spacer()
@@ -220,15 +238,6 @@ struct LocSimView: View {
                     }
                     Spacer()
                     VStack(spacing: 10) {
-                    // Save the pin position to Bookmarks
-                    Button { savePinToBookmarks() } label: {
-                        Image(systemName: "star")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundColor(.orange)
-                            .frame(width: 48, height: 48)
-                            .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Color(.systemBackground)))
-                            .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
-                    }
                     // Go to my real location
                     Button { recenterTick += 1 } label: {
                         Image(systemName: "location")
@@ -270,6 +279,29 @@ struct LocSimView: View {
         activeLoc = "\(wgs.latitude),\(wgs.longitude)"
         logToHistory(lat: wgs.latitude, long: wgs.longitude)
         AlertKitAPI.present(title: "Đã bắt đầu giả lập", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+    }
+
+    private func enterCoordinates() {
+        let alert = UIAlertController(title: "Giả lập theo toạ độ",
+                                      message: "Có thể dán cả cặp \"21.05, 105.91\" vào ô Vĩ độ.",
+                                      preferredStyle: .alert)
+        alert.addTextField { f in f.placeholder = "Vĩ độ (latitude)"; f.keyboardType = .numbersAndPunctuation }
+        alert.addTextField { f in f.placeholder = "Kinh độ (longitude)"; f.keyboardType = .numbersAndPunctuation }
+        alert.addAction(UIAlertAction(title: "Huỷ", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Giả lập", style: .default) { _ in
+            let latText = alert.textFields?[0].text ?? "", longText = alert.textFields?[1].text ?? ""
+            let clean: (String) -> String = { $0.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces) }
+            var la = Double(clean(latText)), lo = Double(clean(longText))
+            if lo == nil, let pair = parseText(latText).first { la = pair.lat; lo = pair.long }   // pasted "lat, long"
+            guard let la, let lo, (-90...90).contains(la), (-180...180).contains(lo) else {
+                UIApplication.shared.alert(body: "Toạ độ không hợp lệ.")
+                return
+            }
+            let typed = CLLocationCoordinate2D(latitude: la, longitude: lo)
+            fake(wgs: CoordTransform.gcj02ToWgs84(typed))
+            focus(typed)
+        })
+        presentTop(alert)
     }
 
     private func savePinToBookmarks() {
@@ -611,16 +643,6 @@ struct CustomizeAppView: View {
                     .disabled(busy || (!nameChanged && croppedIcon == nil))
                 } footer: {
                     Text("Đổi tên hoặc dùng ảnh riêng cần respring mới hiện ra. App sẽ hỏi bạn respring ngay hay để sau.")
-                }
-
-                Section {
-                    TextField("Vĩ độ (latitude)", text: $manualLat).keyboardType(.numbersAndPunctuation)
-                    TextField("Kinh độ (longitude)", text: $manualLong).keyboardType(.numbersAndPunctuation)
-                    Button("Giả lập toạ độ này") { fakeManual() }
-                } header: {
-                    Text("Giả lập theo toạ độ")
-                } footer: {
-                    Text("Có thể dán cả cặp \"21.05, 105.91\" vào ô Vĩ độ.")
                 }
 
                 Section {
