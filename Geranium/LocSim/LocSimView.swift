@@ -256,6 +256,16 @@ struct LocSimView: View {
                 Spacer()
             }
 
+            // Search Apple Maps: top-left, left of the keyboard button
+            VStack {
+                MapSearchBar(near: centerCoordinate) { c, _ in focus(c) }
+                    .padding(.leading, 10)
+                    .padding(.trailing, 64)
+                    .padding(.top, 10)
+                Spacer()
+            }
+            .zIndex(2)
+
             // Vertical zoom slider at the right edge: drag down = zoom in, up = zoom out. Centre stays put.
             HStack {
                 Spacer()
@@ -1951,6 +1961,7 @@ struct PickMapView: UIViewRepresentable {
     var markers: [(String, CLLocationCoordinate2D)]     // label + map coordinate
     @Binding var center: CLLocationCoordinate2D?
     var recenterTick: Int = 0
+    var focus: EquatableCoordinate? = nil
 
     func makeUIView(context: Context) -> MKMapView {
         let m = MKMapView()
@@ -1970,6 +1981,10 @@ struct PickMapView: UIViewRepresentable {
             context.coordinator.lastRecenter = recenterTick
             if let loc = m.userLocation.location?.coordinate, CLLocationCoordinate2DIsValid(loc) { m.setCenter(loc, animated: true) }
         }
+        if let f = focus, f != context.coordinator.lastFocus {
+            context.coordinator.lastFocus = f
+            m.setRegion(MKCoordinateRegion(center: f.coordinate, latitudinalMeters: 800, longitudinalMeters: 800), animated: true)
+        }
         guard sig != context.coordinator.lastSig else { return }
         context.coordinator.lastSig = sig
         m.removeAnnotations(m.annotations.filter { !($0 is MKUserLocation) })
@@ -1987,6 +2002,7 @@ struct PickMapView: UIViewRepresentable {
         var parent: PickMapView
         var lastSig = ""
         var lastRecenter = 0
+        var lastFocus: EquatableCoordinate?
         init(_ p: PickMapView) { parent = p }
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
@@ -2017,6 +2033,7 @@ struct MapPointPicker: View {
     @Environment(\.dismiss) private var dismiss
     @State private var center: CLLocationCoordinate2D? = nil
     @State private var recenterTick = 0
+    @State private var focusTick: EquatableCoordinate? = nil
 
     private var markers: [(String, CLLocationCoordinate2D)] {
         picked.enumerated().map { (numberLabel($0.offset, picked.count), CoordTransform.wgs84ToGcj02($0.element.coordinate)) }
@@ -2025,9 +2042,16 @@ struct MapPointPicker: View {
     var body: some View {
         NavigationView {
             ZStack {
-                PickMapView(start: start, markers: markers, center: $center, recenterTick: recenterTick)
+                PickMapView(start: start, markers: markers, center: $center, recenterTick: recenterTick, focus: focusTick)
                     .ignoresSafeArea(edges: .bottom)
                 CenterPin()
+                VStack {
+                    MapSearchBar(near: center ?? start) { c, _ in focusTick = EquatableCoordinate(coordinate: c) }
+                        .padding(.horizontal, 12)
+                        .padding(.top, 8)
+                    Spacer()
+                }
+                .zIndex(2)
                 // Current location button (bottom right, above the add buttons)
                 VStack {
                     Spacer()
@@ -2130,6 +2154,109 @@ struct AddNextPointsView: View {
                         .disabled(picked.isEmpty)
                 }
             }
+        }
+    }
+}
+
+// MARK: - Search places on Apple Maps (used on every map)
+
+final class PlaceSearchModel: NSObject, ObservableObject, MKLocalSearchCompleterDelegate {
+    @Published var results: [MKLocalSearchCompletion] = []
+    private let completer = MKLocalSearchCompleter()
+
+    override init() {
+        super.init()
+        completer.delegate = self
+        completer.resultTypes = [.address, .pointOfInterest]
+    }
+
+    func update(_ text: String, near: CLLocationCoordinate2D?) {
+        if let c = near { completer.region = MKCoordinateRegion(center: c, latitudinalMeters: 50_000, longitudinalMeters: 50_000) }
+        let q = text.trimmingCharacters(in: .whitespaces)
+        if q.isEmpty { results = []; completer.cancel() } else { completer.queryFragment = q }
+    }
+
+    func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
+        results = Array(completer.results.prefix(8))
+    }
+    func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) { results = [] }
+}
+
+/// Search field with live suggestions. `onPick` gets the map coordinate and the place name.
+struct MapSearchBar: View {
+    var near: CLLocationCoordinate2D?
+    var onPick: (CLLocationCoordinate2D, String) -> Void
+    @StateObject private var model = PlaceSearchModel()
+    @State private var text = ""
+    @State private var searching = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundColor(.secondary)
+                TextField(L("Tìm địa điểm", "Search places"), text: $text)
+                    .disableAutocorrection(true)
+                    .focused($focused)
+                    .submitLabel(.search)
+                    .onSubmit { run(MKLocalSearch.Request(), query: text) }
+                    .onChange(of: text) { model.update($0, near: near) }
+                if searching { ProgressView().scaleEffect(0.8) }
+                if !text.isEmpty {
+                    Button { text = ""; model.update("", near: near) } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 44)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.systemBackground)))
+            .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+
+            if focused && !model.results.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(Array(model.results.enumerated()), id: \.offset) { i, r in
+                        Button {
+                            run(MKLocalSearch.Request(completion: r), query: nil)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(r.title).font(.subheadline).foregroundColor(.primary).lineLimit(1)
+                                if !r.subtitle.isEmpty {
+                                    Text(r.subtitle).font(.caption).foregroundColor(.secondary).lineLimit(1)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                        }
+                        if i < model.results.count - 1 { Divider().padding(.leading, 12) }
+                    }
+                }
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.systemBackground)))
+                .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+                .padding(.top, 6)
+            }
+        }
+    }
+
+    private func run(_ req: MKLocalSearch.Request, query: String?) {
+        if let q = query {
+            guard !q.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+            req.naturalLanguageQuery = q
+            if let c = near { req.region = MKCoordinateRegion(center: c, latitudinalMeters: 50_000, longitudinalMeters: 50_000) }
+        }
+        searching = true
+        MKLocalSearch(request: req).start { resp, _ in
+            searching = false
+            guard let item = resp?.mapItems.first else {
+                UIApplication.shared.alert(body: L("Không tìm thấy địa điểm.", "No place found."))
+                return
+            }
+            let name = item.name ?? text
+            text = name
+            focused = false
+            hideKeyboard()
+            onPick(item.placemark.coordinate, name)
         }
     }
 }
