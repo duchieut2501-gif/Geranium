@@ -80,6 +80,7 @@ struct LocSimView: View {
     @State private var savePin: PlaceEdit? = nil
     @State private var hopSheet = false
     @State private var routeSheet = false
+    @State private var addNextSheet = false
     @ObservedObject private var route = RouteRunner.shared
     @AppStorage("textSize") private var textSize: String = TextSizeOption.small.rawValue
     /// "lat,long" of the place being simulated ("" = none). Lists use it to mark that row red.
@@ -167,6 +168,11 @@ struct LocSimView: View {
                     AlertKitAPI.present(title: L("Bắt đầu nhảy cóc", "Hopping started"), icon: .done, style: .iOS17AppleMusic, haptic: .success)
                 }
             }
+            .sheet(isPresented: $addNextSheet) {
+                AddNextPointsView(pinCoordinate: centerCoordinate.map { CoordTransform.gcj02ToWgs84($0) }) { pts in
+                    appendToTrip(pts)
+                }
+            }
             .sheet(isPresented: $routeSheet) {
                 RouteSetupView(pinCoordinate: centerCoordinate.map { CoordTransform.gcj02ToWgs84($0) }) { path, marks, kmh, vary, wait, end in
                     HopRunner.shared.stop()
@@ -245,7 +251,7 @@ struct LocSimView: View {
                 }
                 HopBanner(onStop: stop)
                     .padding(.horizontal, 12)
-                RouteBanner(onStop: stop)
+                RouteBanner(onStop: stop, onAddPin: addPinToTrip, onAddFromList: { addNextSheet = true })
                     .padding(.horizontal, 12)
                 Spacer()
             }
@@ -398,6 +404,23 @@ struct LocSimView: View {
     private func focus(_ c: CLLocationCoordinate2D) {
         focusCoordinate = nil
         DispatchQueue.main.async { focusCoordinate = EquatableCoordinate(coordinate: c) }
+    }
+
+    private func addPinToTrip() {
+        guard let c = centerCoordinate, CLLocationCoordinate2DIsValid(c) else { return }
+        let w = CoordTransform.gcj02ToWgs84(c)
+        appendToTrip([Bookmark(name: L("Điểm ghim trên bản đồ", "Map pin"), lat: w.latitude, long: w.longitude)])
+    }
+
+    private func appendToTrip(_ pts: [Bookmark]) {
+        RouteRunner.shared.append(pts) { err in
+            if let err {
+                UIApplication.shared.alert(body: L("Không tìm được đường: ", "Could not find a route: ") + err)
+            } else {
+                withAnimation(.easeInOut(duration: 0.2)) { isFaking = true }
+                AlertKitAPI.present(title: L("Đã thêm vào hành trình", "Added to the trip"), icon: .done, style: .iOS17AppleMusic, haptic: .success)
+            }
+        }
     }
 
     private func stop() {
@@ -1300,7 +1323,7 @@ enum RouteEnd: String, CaseIterable, Identifiable {
 final class RouteRunner: ObservableObject {
     static let shared = RouteRunner()
     enum State { case idle, running, paused, waiting, arrived }
-    struct Sample { var c: CLLocationCoordinate2D; var course: Double; var speed: Double; var dist: Double; var wait: Bool }
+    struct Sample { var c: CLLocationCoordinate2D; var course: Double; var speed: Double; var dist: Double; var wait: Bool; var pathD: Double = 0 }
 
     @Published private(set) var state: State = .idle
     @Published private(set) var distance: Double = 0          // metres travelled (whole trip)
@@ -1311,12 +1334,19 @@ final class RouteRunner: ObservableObject {
     @Published private(set) var displayPath: [CLLocationCoordinate2D] = []
     @Published private(set) var pathID = UUID()
     @Published var points: [Bookmark] = []                   // last chosen points (kept for next time)
+    @Published private(set) var extending = false             // finding the road to an added point
 
     /// true = hand the whole trip to iOS (keeps going even if the app is closed). Settings: "routeSystemPlayback".
     private var systemPlayback: Bool { UserDefaults.standard.object(forKey: "routeSystemPlayback") as? Bool ?? true }
     private var usingSystem = false
     private var samples: [Sample] = []                        // one per second
-    private var loop = false
+    private var loopStart: Int? = nil                         // "back and forth": samples[loopStart...] repeat
+    private var path: [CLLocationCoordinate2D] = []           // WGS-84 road path
+    private var marks: [Double] = []                          // path distances of the stops
+    private var speedKmh: Double = 40
+    private var vary = true
+    private var stopSeconds = 0
+    private var end: RouteEnd = .stop
     private var elapsedBase: Double = 0
     private var runStart: Date?
     private var lastIndex = -1
@@ -1372,10 +1402,16 @@ final class RouteRunner: ObservableObject {
     func start(path: [CLLocationCoordinate2D], stopMarks: [Double], speedKmh: Double, vary: Bool, stopSeconds: Int, end: RouteEnd) {
         stop()
         guard path.count >= 2 else { return }
-        samples = Self.makeSamples(path: path, stopMarks: stopMarks, speedKmh: max(speedKmh, 1), vary: vary,
-                                   stopSeconds: max(stopSeconds, 0), end: end)
+        self.path = path
+        marks = stopMarks
+        self.speedKmh = max(speedKmh, 1)
+        self.vary = vary
+        self.stopSeconds = max(stopSeconds, 0)
+        self.end = end
+        let plan = makePlan(from: 0, travelled: 0, first: true)
+        samples = plan.0
+        loopStart = plan.1
         guard !samples.isEmpty else { return }
-        loop = end == .loop
         total = samples.last?.dist ?? 0
         displayPath = path.map { CoordTransform.wgs84ToGcj02($0) }
         pathID = UUID()
@@ -1387,9 +1423,54 @@ final class RouteRunner: ObservableObject {
         if usingSystem { upload(from: 0) }
         BackgroundKeeper.shared.update()
         tick()
+        startTimer()
+    }
+
+    private func startTimer() {
+        timer?.invalidate()
         let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(t, forMode: .common)
         timer = t
+    }
+
+    /// Adds more points after the current end (B). The trip goes on, or starts again if it had arrived.
+    func append(_ newPoints: [Bookmark], done: @escaping (String?) -> Void) {
+        guard state != .idle, let last = path.last, !newPoints.isEmpty, !extending else { done(nil); return }
+        extending = true
+        let walking = UserDefaults.standard.bool(forKey: "routeWalking")
+        let from = Bookmark(name: "", lat: last.latitude, long: last.longitude)
+        Self.buildRoute(points: [from] + newPoints, walking: walking, progress: { _, _ in }, done: { [weak self] result in
+            guard let self else { return }
+            self.extending = false
+            guard self.state != .idle else { done(nil); return }
+            switch result {
+            case .failure(let e):
+                done(e.localizedDescription)
+            case .success(let (leg, legMarks)):
+                let oldTotal = self.pathLength
+                self.path += leg.dropFirst()
+                self.marks.append(oldTotal)
+                self.marks += legMarks.map { $0 + oldTotal }
+                self.points += newPoints
+                let keep = max(self.lastIndex, 0)
+                let cur = self.samples.indices.contains(keep) ? self.samples[keep] : self.samples.last
+                let prefix = Array(self.samples[...min(keep, self.samples.count - 1)])
+                let plan = self.makePlan(from: cur?.pathD ?? oldTotal, travelled: cur?.dist ?? 0, first: false)
+                self.samples = prefix + plan.0
+                self.loopStart = plan.1.map { prefix.count + $0 }
+                self.total = self.samples.last?.dist ?? 0
+                self.displayPath = self.path.map { CoordTransform.wgs84ToGcj02($0) }
+                self.pathID = UUID()
+                if self.state == .arrived {
+                    self.elapsedBase = Double(keep); self.runStart = Date()
+                    self.state = .running
+                    self.startTimer()
+                    BackgroundKeeper.shared.update()
+                }
+                if self.usingSystem && self.state != .paused { self.upload(from: keep) }
+                done(nil)
+            }
+        })
     }
 
     func togglePause() {
@@ -1419,8 +1500,9 @@ final class RouteRunner: ObservableObject {
     private func tick() {
         guard state != .idle, state != .paused, state != .arrived, !samples.isEmpty else { return }
         var i = Int(elapsed)
-        if loop { i %= samples.count }
-        else if i >= samples.count - 1 {
+        if let ls = loopStart, samples.count > ls {
+            if i >= samples.count { i = ls + (i - ls) % (samples.count - ls) }
+        } else if i >= samples.count - 1 {
             i = samples.count - 1
             show(i)
             if !usingSystem { send(samples[i], speed: 0) }
@@ -1464,17 +1546,33 @@ final class RouteRunner: ObservableObject {
 
     /// Hands samples[from...] to iOS, one per second; iOS plays them on its own (app may be closed).
     private func upload(from: Int) {
-        let rest = Array(samples[min(from, samples.count - 1)...]) + (loop ? Array(samples[..<min(from, samples.count)]) : [])
+        var rest = Array(samples[min(from, samples.count - 1)...])
+        if let ls = loopStart, samples.count > ls {
+            let cycle = samples[ls...]
+            while rest.count < 21_600 { rest += cycle }         // about 6 hours ahead, then iOS repeats
+        }
         let now = Date()
         LocSimManager.playRoute(rest.enumerated().map { location($0.element, speed: $0.element.speed, at: now.addingTimeInterval(Double($0.offset))) },
-                                interval: 1, loop: loop)
+                                interval: 1, loop: loopStart != nil)
         if let last = samples.last { UserDefaults.standard.set("\(last.c.latitude),\(last.c.longitude)", forKey: "activeLoc") }
     }
 
     // MARK: Build the per-second plan
 
-    private static func makeSamples(path: [CLLocationCoordinate2D], stopMarks: [Double], speedKmh: Double,
-                                    vary: Bool, stopSeconds: Int, end: RouteEnd) -> [Sample] {
+    private var pathLength: Double {
+        var d: Double = 0
+        for i in 1..<max(path.count, 1) {
+            d += CLLocation(latitude: path[i - 1].latitude, longitude: path[i - 1].longitude)
+                .distance(from: CLLocation(latitude: path[i].latitude, longitude: path[i].longitude))
+        }
+        return d
+    }
+
+    /// Per-second plan from path distance `from` forward to the end, then back / back-and-forth.
+    /// Returns the samples and, for back-and-forth, where the repeating part starts.
+    private func makePlan(from start: Double, travelled t0: Double, first: Bool) -> ([Sample], Int?) {
+        let path = self.path, stopMarks = marks, speedKmh = self.speedKmh, vary = self.vary, stopSeconds = self.stopSeconds
+        guard path.count >= 2 else { return ([], nil) }
         var cum: [Double] = [0]
         for i in 1..<path.count {
             cum.append(cum[i - 1] + CLLocation(latitude: path[i - 1].latitude, longitude: path[i - 1].longitude)
@@ -1489,49 +1587,56 @@ final class RouteRunner: ObservableObject {
             let t = seg > 0 ? (d - cum[i - 1]) / seg : 0
             let c = CLLocationCoordinate2D(latitude: a.latitude + (b.latitude - a.latitude) * t,
                                            longitude: a.longitude + (b.longitude - a.longitude) * t)
-            var course = bearing(a, b)
+            var course = Self.bearing(a, b)
             if dir < 0 { course = (course + 180).truncatingRemainder(dividingBy: 360) }
             return (c, course)
         }
         var out: [Sample] = []
-        var travelled: Double = 0
+        var travelled = t0
         var factor: Double = 1
+        var lastD = start
+        func wait() {
+            guard stopSeconds > 0, let l = out.last else { return }
+            for _ in 0..<stopSeconds { out.append(Sample(c: l.c, course: l.course, speed: 0, dist: travelled, wait: true, pathD: lastD)) }
+        }
         func leg(from: Double, to: Double) {
             let dir: Double = to >= from ? 1 : -1
-            let marks = (dir > 0 ? stopMarks.sorted() : stopMarks.sorted(by: >))
-                .filter { dir > 0 ? ($0 > from && $0 < to) : ($0 < from && $0 > to) }
+            let ms = (dir > 0 ? stopMarks.sorted() : stopMarks.sorted(by: >))
+                .filter { dir > 0 ? ($0 > from + 0.5 && $0 < to - 0.5) : ($0 < from - 0.5 && $0 > to + 0.5) }
             var d = from
             var next = 0
-            let (c0, k0) = pos(d, dir)
-            if out.isEmpty { out.append(Sample(c: c0, course: k0, speed: 0, dist: 0, wait: false)) }
             while dir > 0 ? d < to : d > to {
                 if vary { factor = min(max(factor + Double.random(in: -0.08...0.08), 0.8), 1.2) } else { factor = 1 }
                 let v = speedKmh * factor / 3.6
                 var nd = d + dir * v
                 var atStop = false
-                if next < marks.count, dir > 0 ? nd >= marks[next] : nd <= marks[next] { nd = marks[next]; next += 1; atStop = true }
+                if next < ms.count, dir > 0 ? nd >= ms[next] : nd <= ms[next] { nd = ms[next]; next += 1; atStop = true }
                 if dir > 0 ? nd >= to : nd <= to { nd = to }
                 travelled += abs(nd - d)
                 d = nd
+                lastD = d
                 let (c, k) = pos(d, dir)
-                out.append(Sample(c: c, course: k, speed: v, dist: travelled, wait: false))
-                if atStop && stopSeconds > 0 {
-                    for _ in 0..<stopSeconds { out.append(Sample(c: c, course: k, speed: 0, dist: travelled, wait: true)) }
-                }
+                out.append(Sample(c: c, course: k, speed: v, dist: travelled, wait: false, pathD: d))
+                if atStop { wait() }
                 if out.count > 200_000 { return }
             }
         }
-        leg(from: 0, to: total)
-        if end != .stop {
-            if stopSeconds > 0, let l = out.last {
-                for _ in 0..<stopSeconds { out.append(Sample(c: l.c, course: l.course, speed: 0, dist: travelled, wait: true)) }
-            }
-            leg(from: total, to: 0)
-            if end == .loop, stopSeconds > 0, let l = out.last {
-                for _ in 0..<stopSeconds { out.append(Sample(c: l.c, course: l.course, speed: 0, dist: travelled, wait: true)) }
-            }
+        if first {
+            let (c0, k0) = pos(start, 1)
+            out.append(Sample(c: c0, course: k0, speed: 0, dist: travelled, wait: false, pathD: start))
         }
-        return out
+        leg(from: start, to: total)
+        switch end {
+        case .stop:
+            return (out, nil)
+        case .back:
+            wait(); leg(from: total, to: 0)
+            return (out, nil)
+        case .loop:
+            let ls = out.count
+            wait(); leg(from: total, to: 0); wait(); leg(from: 0, to: total)
+            return (out, out.count > ls ? ls : nil)
+        }
     }
 
     private static func bearing(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
@@ -1579,8 +1684,11 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
 struct RouteBanner: View {
     @ObservedObject var runner = RouteRunner.shared
     var onStop: () -> Void
+    var onAddPin: () -> Void = {}
+    var onAddFromList: () -> Void = {}
     var body: some View {
         if runner.isActive {
+            VStack(spacing: 8) {
             HStack(spacing: 10) {
                 Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
                     .font(.system(size: 18)).foregroundColor(.accentColor)
@@ -1601,6 +1709,27 @@ struct RouteBanner: View {
                         .font(.system(size: 14, weight: .bold)).foregroundColor(.white)
                         .frame(width: 32, height: 32).background(Circle().fill(runner.state == .arrived ? Color.gray : Color.red))
                 }
+            }
+            // Add the next point: continues the trip (or restarts it after arriving)
+            Menu {
+                Button(action: onAddPin) {
+                    Label(L("Điểm ghim giữa bản đồ", "The pin in the map centre"), systemImage: "mappin.and.ellipse")
+                }
+                Button(action: onAddFromList) {
+                    Label(L("Chọn từ Đánh dấu / Lịch sử / bản đồ…", "From Bookmarks / History / map…"), systemImage: "list.bullet")
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    if runner.extending { ProgressView().scaleEffect(0.8) } else { Image(systemName: "plus.circle.fill") }
+                    Text(runner.extending ? L("Đang tìm đường…", "Finding the road…") : L("Thêm điểm tiếp theo", "Add next point"))
+                        .font(.footnote.weight(.semibold))
+                }
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(Capsule().fill(Color.accentColor))
+            }
+            .disabled(runner.extending)
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial))
@@ -1941,6 +2070,32 @@ struct MapPointPicker: View {
             guard !label.isEmpty else { return }
             DispatchQueue.main.async {
                 if let i = picked.firstIndex(where: { $0.id == b.id }) { picked[i].name = label }
+            }
+        }
+    }
+}
+
+/// Pick one or more points to add after the current end of the trip.
+struct AddNextPointsView: View {
+    var pinCoordinate: CLLocationCoordinate2D?
+    var onAdd: ([Bookmark]) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var picked: [Bookmark] = []
+
+    var body: some View {
+        NavigationView {
+            List {
+                PointPickerSections(picked: $picked, pinCoordinate: pinCoordinate, numberLabel: { i, _ in "+\(i + 1)" })
+            }
+            .navigationTitle(L("Thêm điểm tiếp theo", "Add next points"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) { Button(L("Huỷ", "Cancel")) { dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(L("Thêm", "Add")) { onAdd(picked); dismiss() }
+                        .font(.body.weight(.semibold))
+                        .disabled(picked.isEmpty)
+                }
             }
         }
     }
