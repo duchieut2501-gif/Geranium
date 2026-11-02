@@ -279,6 +279,7 @@ struct LocSimView: View {
                         AlertKitAPI.present(title: L("Đã sao chép toạ độ", "Coordinates copied"), icon: .done, style: .iOS17AppleMusic, haptic: .success)
                     }
                 HStack(alignment: .bottom) {
+                    if !route.isActive {
                     // Play (always available, re-play moves to the new pin) + Stop (grey → red while simulating)
                     HStack(spacing: 14) {
                         Button(action: { withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) { startAtPin() } }) {
@@ -308,6 +309,7 @@ struct LocSimView: View {
                                 removal: .scale(scale: 0.2, anchor: .leading).combined(with: .opacity)))
                         }
                     }
+                    }
                     Spacer()
                     VStack(spacing: 10) {
                     // Compass: appears when the map is rotated, turns with it; tap = north up
@@ -321,7 +323,9 @@ struct LocSimView: View {
                         .transition(.scale(scale: 0.3).combined(with: .opacity))
                     }
                     // Go to my real location
-                    Button { recenterTick += 1 } label: {
+                    Button {
+                        if route.isActive, let p = route.displayPosition { focus(p) } else { recenterTick += 1 }
+                    } label: {
                         Image(systemName: "location")
                             .font(.system(size: 22, weight: .semibold))
                             .foregroundColor(.accentColor)
@@ -1353,6 +1357,11 @@ final class RouteRunner: ObservableObject {
     private var timer: Timer?
 
     var isActive: Bool { state != .idle }
+    /// Map coordinate of where the trip is now.
+    var displayPosition: CLLocationCoordinate2D? {
+        let s = samples.indices.contains(lastIndex) ? samples[lastIndex] : samples.first
+        return s.map { CoordTransform.wgs84ToGcj02($0.c) }
+    }
 
     /// Asks Apple Maps for the route leg by leg. Calls back on the main thread.
     static func buildRoute(points: [Bookmark], walking: Bool,
@@ -1890,9 +1899,7 @@ struct RouteSetupView: View {
                            "The first point is A, the last is B, points in between are stops. Roads come from Apple Maps. \"Let iOS play the trip\" on: keeps moving even if the app is closed. Off: the app drives it and keeps running in the background (blue location icon)."))
                 }
 
-                PointPickerSections(picked: $picked, pinCoordinate: pinCoordinate, numberLabel: { i, n in
-                    i == 0 ? "A" : (i == n - 1 && n > 1 ? "B" : "\(i)")
-                })
+                PointPickerSections(picked: $picked, pinCoordinate: pinCoordinate, numberLabel: { i, _ in "\(i + 1)" })
             }
             .navigationTitle(L("Đi theo đường", "Follow roads"))
             .navigationBarTitleDisplayMode(.inline)
@@ -1957,6 +1964,7 @@ struct PickMapView: UIViewRepresentable {
 
     func updateUIView(_ m: MKMapView, context: Context) {
         let sig = markers.map { "\($0.0)|\($0.1.latitude),\($0.1.longitude)" }.joined(separator: ";")
+        context.coordinator.parent = self
         guard sig != context.coordinator.lastSig else { return }
         context.coordinator.lastSig = sig
         m.removeAnnotations(m.annotations.filter { !($0 is MKUserLocation) })
@@ -1988,7 +1996,8 @@ struct PickMapView: UIViewRepresentable {
             let t = annotation.title ?? nil
             v.glyphText = t
             v.titleVisibility = .hidden
-            v.markerTintColor = t == "A" ? .systemGreen : (t == "B" ? .systemRed : .systemBlue)
+            let n = parent.markers.count
+            v.markerTintColor = t == "1" ? .systemGreen : (n > 1 && t == "\(n)" ? .systemRed : .systemBlue)
             v.displayPriority = .required
             return v
         }

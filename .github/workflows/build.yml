@@ -49,8 +49,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          VER=$(grep -m1 -o 'MARKETING_VERSION = [0-9.]*' Geranium.xcodeproj/project.pbxproj | awk '{print $3}')
+          cp build/LocationSimulator.tipa "build/LocationSimulator_${VER}.tipa"
           gh release delete build -y --cleanup-tag -R "$GITHUB_REPOSITORY" || true
-          gh release create build build/LocationSimulator.tipa -R "$GITHUB_REPOSITORY" \
-            --title "Location Simulator 1.1 (latest build)" \
-            --notes "Built at $(TZ=Asia/Ho_Chi_Minh date '+%H:%M, %d/%m/%Y') (UTC+7). Open LocationSimulator.tipa with TrollStore to install." \
+          gh release create build "build/LocationSimulator_${VER}.tipa" -R "$GITHUB_REPOSITORY" \
+            --title "Location Simulator ${VER} (latest build)" \
+            --notes "Built at $(TZ=Asia/Ho_Chi_Minh date '+%H:%M, %d/%m/%Y') (UTC+7). Open LocationSimulator_${VER}.tipa with TrollStore to install." \
             --target "$GITHUB_SHA" --latest
