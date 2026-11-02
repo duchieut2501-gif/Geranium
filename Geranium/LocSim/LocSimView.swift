@@ -1542,6 +1542,7 @@ struct PointPickerSections: View {
     @State private var source: LocList = .bookmarks
     @State private var search = ""
     @State private var items: [Bookmark] = []
+    @State private var mapPicker = false
 
     private func key(_ b: Bookmark) -> String { String(format: "%.6f,%.6f", b.lat, b.long) }
     private func order(_ b: Bookmark) -> Int? { picked.firstIndex { key($0) == key(b) } }
@@ -1549,6 +1550,14 @@ struct PointPickerSections: View {
 
     var body: some View {
         Section {
+            Button { hideKeyboard(); mapPicker = true } label: {
+                Label(L("Chọn điểm trên bản đồ", "Pick points on the map"), systemImage: "map")
+            }
+            .fullScreenCover(isPresented: $mapPicker) {
+                MapPointPicker(picked: $picked,
+                               start: (picked.last?.coordinate ?? pinCoordinate).map { CoordTransform.wgs84ToGcj02($0) },
+                               numberLabel: numberLabel)
+            }
             if let pin = pinCoordinate {
                 Button {
                     picked.append(Bookmark(name: L("Điểm ghim trên bản đồ", "Map pin"), lat: pin.latitude, long: pin.longitude))
@@ -1704,5 +1713,144 @@ struct RouteSetupView: View {
                 UIApplication.shared.alert(body: L("Không tìm được đường: ", "Could not find a route: ") + e.localizedDescription)
             }
         })
+    }
+}
+
+// MARK: - Pick route points right on the map
+
+/// Small map for picking points: fixed centre pin, picked points shown as numbered markers.
+struct PickMapView: UIViewRepresentable {
+    var start: CLLocationCoordinate2D?                  // map coordinate to open at
+    var markers: [(String, CLLocationCoordinate2D)]     // label + map coordinate
+    @Binding var center: CLLocationCoordinate2D?
+
+    func makeUIView(context: Context) -> MKMapView {
+        let m = MKMapView()
+        m.delegate = context.coordinator
+        m.showsUserLocation = true
+        m.pointOfInterestFilter = .includingAll
+        if let s = start {
+            m.setRegion(MKCoordinateRegion(center: s, latitudinalMeters: 1500, longitudinalMeters: 1500), animated: false)
+        }
+        return m
+    }
+
+    func updateUIView(_ m: MKMapView, context: Context) {
+        let sig = markers.map { "\($0.0)|\($0.1.latitude),\($0.1.longitude)" }.joined(separator: ";")
+        guard sig != context.coordinator.lastSig else { return }
+        context.coordinator.lastSig = sig
+        m.removeAnnotations(m.annotations.filter { !($0 is MKUserLocation) })
+        for (label, c) in markers {
+            let a = MKPointAnnotation()
+            a.coordinate = c
+            a.title = label
+            m.addAnnotation(a)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    class Coordinator: NSObject, MKMapViewDelegate {
+        var parent: PickMapView
+        var lastSig = ""
+        init(_ p: PickMapView) { parent = p }
+
+        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            let c = mapView.centerCoordinate
+            DispatchQueue.main.async { self.parent.center = c }
+        }
+
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            guard !(annotation is MKUserLocation) else { return nil }
+            let v = mapView.dequeueReusableAnnotationView(withIdentifier: "pt") as? MKMarkerAnnotationView
+                ?? MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: "pt")
+            v.annotation = annotation
+            let t = annotation.title ?? nil
+            v.glyphText = t
+            v.titleVisibility = .hidden
+            v.markerTintColor = t == "A" ? .systemGreen : (t == "B" ? .systemRed : .systemBlue)
+            v.displayPriority = .required
+            return v
+        }
+    }
+}
+
+struct MapPointPicker: View {
+    @Binding var picked: [Bookmark]
+    var start: CLLocationCoordinate2D?                  // map coordinate
+    var numberLabel: (Int, Int) -> String
+    @Environment(\.dismiss) private var dismiss
+    @State private var center: CLLocationCoordinate2D? = nil
+
+    private var markers: [(String, CLLocationCoordinate2D)] {
+        picked.enumerated().map { (numberLabel($0.offset, picked.count), CoordTransform.wgs84ToGcj02($0.element.coordinate)) }
+    }
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                PickMapView(start: start, markers: markers, center: $center)
+                    .ignoresSafeArea(edges: .bottom)
+                CenterPin()
+                VStack(spacing: 10) {
+                    Spacer()
+                    if let c = center {
+                        Text(String(format: "%.6f, %.6f", c.latitude, c.longitude))
+                            .font(.footnote.monospacedDigit())
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(Capsule().fill(.ultraThinMaterial))
+                    }
+                    HStack(spacing: 12) {
+                        if !picked.isEmpty {
+                            Button {
+                                picked.removeLast()
+                            } label: {
+                                Label(L("Bỏ điểm cuối", "Undo"), systemImage: "arrow.uturn.backward")
+                                    .font(.body.weight(.semibold))
+                                    .padding(.horizontal, 16).padding(.vertical, 12)
+                                    .background(Capsule().fill(Color(.systemBackground)))
+                                    .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+                            }
+                        }
+                        Button(action: addHere) {
+                            Label(L("Thêm điểm \(numberLabel(picked.count, picked.count + 1))", "Add point \(numberLabel(picked.count, picked.count + 1))"),
+                                  systemImage: "plus.circle.fill")
+                                .font(.body.weight(.semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 18).padding(.vertical, 12)
+                                .background(Capsule().fill(Color.accentColor))
+                                .shadow(color: .black.opacity(0.22), radius: 6, y: 3)
+                        }
+                        .disabled(center == nil)
+                    }
+                    .padding(.bottom, 28)
+                }
+            }
+            .navigationTitle(L("Đã chọn \(picked.count) điểm", "\(picked.count) points picked"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(L("Xong", "Done")) { dismiss() }.font(.body.weight(.semibold))
+                }
+            }
+        }
+    }
+
+    /// Adds the point under the pin; names it after the street when Apple finds one.
+    private func addHere() {
+        guard let c = center else { return }
+        let wgs = CoordTransform.gcj02ToWgs84(c)
+        let b = Bookmark(name: L("Điểm trên bản đồ", "Point on map"), lat: wgs.latitude, long: wgs.longitude)
+        picked.append(b)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        CLGeocoder().reverseGeocodeLocation(CLLocation(latitude: wgs.latitude, longitude: wgs.longitude)) { marks, _ in
+            guard let p = marks?.first else { return }
+            let name = [p.subThoroughfare, p.thoroughfare].compactMap { $0 }.joined(separator: " ")
+            let label = name.isEmpty ? (p.name ?? "") : name
+            guard !label.isEmpty else { return }
+            DispatchQueue.main.async {
+                if let i = picked.firstIndex(where: { $0.id == b.id }) { picked[i].name = label }
+            }
+        }
     }
 }
