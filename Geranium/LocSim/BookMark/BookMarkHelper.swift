@@ -296,6 +296,21 @@ func deleteFolder(_ name: String) {
     saveList(.bookmarks, items)
 }
 
+/// Removes History entries older than `days` (nil = everything). Returns how many were removed.
+@discardableResult
+func clearHistory(olderThanDays days: Int?) -> Int {
+    let items = loadList(.history)
+    let keep: [Bookmark]
+    if let days {
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400).timeIntervalSince1970
+        keep = items.filter { $0.date >= cutoff }
+    } else {
+        keep = []
+    }
+    saveList(.history, keep)
+    return items.count - keep.count
+}
+
 func deleteItem(_ list: LocList, id: String) {
     var items = loadList(list)
     items.removeAll { $0.id == id }

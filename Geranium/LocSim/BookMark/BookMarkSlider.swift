@@ -372,6 +372,16 @@ struct LocationListView: View {
                 Divider()
                 Button { showImporter = true } label: { Label(L("Nhập từ file", "Import from file"), systemImage: "square.and.arrow.down") }
                 Button { showPaste = true } label: { Label(L("Dán văn bản", "Paste text"), systemImage: "doc.on.clipboard") }
+                if list == .history {
+                    Divider()
+                    Menu {
+                        Button(role: .destructive) { askClear(7) } label: { Label(L("Cũ hơn 7 ngày", "Older than 7 days"), systemImage: "calendar") }
+                        Button(role: .destructive) { askClear(30) } label: { Label(L("Cũ hơn 30 ngày", "Older than 30 days"), systemImage: "calendar") }
+                        Button(role: .destructive) { askClear(nil) } label: { Label(L("Toàn bộ lịch sử", "All history"), systemImage: "trash") }
+                    } label: {
+                        Label(L("Xoá lịch sử", "Clear history"), systemImage: "trash")
+                    }
+                }
             } label: {
                 Image(systemName: "ellipsis.circle").font(.system(size: 27)).frame(width: 40, height: 40)
             }
@@ -448,6 +458,30 @@ struct LocationListView: View {
         UIApplication.shared.confirmAlert(title: L("Xoá danh sách \"\(folder)\"?", "Delete list \"\(folder)\"?"),
                                           body: L("Các địa điểm bên trong vẫn được giữ lại và chuyển ra ngoài danh sách.", "The places inside are kept and moved out of the list."),
                                           onOK: { deleteFolder(folder); reload() }, noCancel: false)
+    }
+
+    private func askClear(_ days: Int?) {
+        let cutoff = Date().addingTimeInterval(-Double(days ?? 0) * 86_400).timeIntervalSince1970
+        let count = days == nil ? items.count : items.filter { $0.date < cutoff }.count
+        guard count > 0 else {
+            showResult(L("Không có gì để xoá", "Nothing to clear"),
+                       days == nil ? L("Lịch sử đang trống.", "History is empty.")
+                                   : L("Không có vị trí nào cũ hơn \(days!) ngày.", "No entries older than \(days!) days."))
+            return
+        }
+        let what = days == nil ? L("toàn bộ \(count) vị trí", "all \(count) entries")
+                               : L("\(count) vị trí cũ hơn \(days!) ngày", "\(count) entries older than \(days!) days")
+        let alert = UIAlertController(title: L("Xoá lịch sử?", "Clear history?"),
+                                      message: L("Xoá \(what) trong Lịch sử. Không thể hoàn tác.\nĐánh dấu và danh sách không bị ảnh hưởng.",
+                                                 "Delete \(what) from History. This cannot be undone.\nBookmarks and lists are not affected."),
+                                      preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: L("Huỷ", "Cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(title: L("Xoá", "Delete"), style: .destructive) { _ in
+            let removed = clearHistory(olderThanDays: days)
+            reload()
+            showResult(L("Đã xoá", "Cleared"), L("Đã xoá \(removed) vị trí khỏi Lịch sử.", "Removed \(removed) entries from History."))
+        })
+        presentTop(alert)
     }
 
     private func copyText() {
