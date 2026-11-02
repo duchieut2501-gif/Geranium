@@ -174,9 +174,9 @@ struct LocSimView: View {
                 }
             }
             .sheet(isPresented: $routeSheet) {
-                RouteSetupView(pinCoordinate: centerCoordinate.map { CoordTransform.gcj02ToWgs84($0) }) { path, marks, kmh, vary, wait, end in
+                RouteSetupView(pinCoordinate: centerCoordinate.map { CoordTransform.gcj02ToWgs84($0) }) { path, marks, kmh, legs, vary, wait, end in
                     HopRunner.shared.stop()
-                    RouteRunner.shared.start(path: path, stopMarks: marks, speedKmh: kmh, vary: vary, stopSeconds: wait, end: end)
+                    RouteRunner.shared.start(path: path, stopMarks: marks, speedKmh: kmh, legSpeeds: legs, vary: vary, stopSeconds: wait, end: end)
                     if let first = path.first { focus(CoordTransform.wgs84ToGcj02(first)) }
                     withAnimation(.easeInOut(duration: 0.2)) { isFaking = true }
                     AlertKitAPI.present(title: L("Bắt đầu di chuyển", "Trip started"), icon: .done, style: .iOS17AppleMusic, haptic: .success)
@@ -1337,7 +1337,7 @@ enum RouteEnd: String, CaseIterable, Identifiable {
 final class RouteRunner: ObservableObject {
     static let shared = RouteRunner()
     enum State { case idle, running, paused, waiting, arrived }
-    struct Sample { var c: CLLocationCoordinate2D; var course: Double; var speed: Double; var dist: Double; var wait: Bool; var pathD: Double = 0 }
+    struct Sample { var c: CLLocationCoordinate2D; var course: Double; var speed: Double; var dist: Double; var wait: Bool; var pathD: Double = 0; var dir: Double = 1 }
 
     @Published private(set) var state: State = .idle
     @Published private(set) var distance: Double = 0          // metres travelled (whole trip)
@@ -1358,6 +1358,9 @@ final class RouteRunner: ObservableObject {
     private var path: [CLLocationCoordinate2D] = []           // WGS-84 road path
     private var marks: [Double] = []                          // path distances of the stops
     private var speedKmh: Double = 40
+    /// Speed of each leg (between two chosen points), km/h. Count = marks.count + 1.
+    @Published private(set) var legSpeeds: [Double] = []
+    private var pendingUpload: DispatchWorkItem?
     private var vary = true
     private var stopSeconds = 0
     private var end: RouteEnd = .stop
@@ -1418,16 +1421,18 @@ final class RouteRunner: ObservableObject {
         }
     }
 
-    func start(path: [CLLocationCoordinate2D], stopMarks: [Double], speedKmh: Double, vary: Bool, stopSeconds: Int, end: RouteEnd) {
+    func start(path: [CLLocationCoordinate2D], stopMarks: [Double], speedKmh: Double, legSpeeds: [Double] = [],
+               vary: Bool, stopSeconds: Int, end: RouteEnd) {
         stop()
         guard path.count >= 2 else { return }
         self.path = path
         marks = stopMarks
         self.speedKmh = max(speedKmh, 1)
+        self.legSpeeds = (0...stopMarks.count).map { i in max(i < legSpeeds.count ? legSpeeds[i] : speedKmh, 1) }
         self.vary = vary
         self.stopSeconds = max(stopSeconds, 0)
         self.end = end
-        let plan = makePlan(from: 0, travelled: 0, first: true)
+        let plan = makePlan(from: 0, dir: 1, travelled: 0, first: true)
         samples = plan.0
         loopStart = plan.1
         guard !samples.isEmpty else { return }
@@ -1468,13 +1473,15 @@ final class RouteRunner: ObservableObject {
             case .success(let (leg, legMarks)):
                 let oldTotal = self.pathLength
                 self.path += leg.dropFirst()
+                let keepSpeed = self.currentLegSpeed
                 self.marks.append(oldTotal)
                 self.marks += legMarks.map { $0 + oldTotal }
+                self.legSpeeds += Array(repeating: keepSpeed, count: legMarks.count + 1)
                 self.points += newPoints
                 let keep = max(self.lastIndex, 0)
                 let cur = self.samples.indices.contains(keep) ? self.samples[keep] : self.samples.last
                 let prefix = Array(self.samples[...min(keep, self.samples.count - 1)])
-                let plan = self.makePlan(from: cur?.pathD ?? oldTotal, travelled: cur?.dist ?? 0, first: false)
+                let plan = self.makePlan(from: cur?.pathD ?? oldTotal, dir: 1, travelled: cur?.dist ?? 0, first: false)
                 self.samples = prefix + plan.0
                 self.loopStart = plan.1.map { prefix.count + $0 }
                 self.total = self.samples.last?.dist ?? 0
@@ -1490,6 +1497,40 @@ final class RouteRunner: ObservableObject {
                 done(nil)
             }
         })
+    }
+
+    /// Index of the leg at path distance d.
+    private func legIndex(_ d: Double, _ dir: Double) -> Int {
+        let n = dir > 0 ? marks.filter { $0 <= d + 0.01 }.count : marks.filter { $0 < d - 0.01 }.count
+        return min(max(n, 0), max(legSpeeds.count - 1, 0))
+    }
+
+    /// Set speed of the leg being driven now (km/h).
+    var currentLegSpeed: Double {
+        guard let s = current, !legSpeeds.isEmpty else { return speedKmh }
+        return legSpeeds[legIndex(s.pathD, s.dir)]
+    }
+
+    /// – / + while driving: changes only the current leg, from where the car is now.
+    func changeSpeed(by delta: Double) {
+        guard state != .idle, state != .arrived, let cur = current, !legSpeeds.isEmpty else { return }
+        let i = legIndex(cur.pathD, cur.dir)
+        legSpeeds[i] = min(max(legSpeeds[i] + delta, 1), 300)
+        let keep = max(lastIndex, 0)
+        let prefix = Array(samples[...min(keep, samples.count - 1)])
+        let plan = makePlan(from: cur.pathD, dir: cur.wait ? cur.dir : cur.dir, travelled: cur.dist, first: false)
+        samples = prefix + plan.0
+        loopStart = plan.1.map { prefix.count + $0 }
+        total = samples.last?.dist ?? 0
+        objectWillChange.send()
+        guard usingSystem, state != .paused else { return }
+        pendingUpload?.cancel()                                    // wait until the taps stop
+        let w = DispatchWorkItem { [weak self] in
+            guard let self, self.state != .idle, self.state != .paused else { return }
+            self.upload(from: max(self.lastIndex, 0))
+        }
+        pendingUpload = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: w)
     }
 
     func togglePause() {
@@ -1589,8 +1630,14 @@ final class RouteRunner: ObservableObject {
 
     /// Per-second plan from path distance `from` forward to the end, then back / back-and-forth.
     /// Returns the samples and, for back-and-forth, where the repeating part starts.
-    private func makePlan(from start: Double, travelled t0: Double, first: Bool) -> ([Sample], Int?) {
-        let path = self.path, stopMarks = marks, speedKmh = self.speedKmh, vary = self.vary, stopSeconds = self.stopSeconds
+    private func makePlan(from start: Double, dir startDir: Double, travelled t0: Double, first: Bool) -> ([Sample], Int?) {
+        let path = self.path, stopMarks = marks, vary = self.vary, stopSeconds = self.stopSeconds
+        let speeds = legSpeeds.isEmpty ? [speedKmh] : legSpeeds
+        let sortedMarks = stopMarks.sorted()
+        func legSpeed(_ d: Double, _ dir: Double) -> Double {
+            let n = dir > 0 ? sortedMarks.filter { $0 <= d + 0.01 }.count : sortedMarks.filter { $0 < d - 0.01 }.count
+            return speeds[min(max(n, 0), speeds.count - 1)]
+        }
         guard path.count >= 2 else { return ([], nil) }
         var cum: [Double] = [0]
         for i in 1..<path.count {
@@ -1616,7 +1663,7 @@ final class RouteRunner: ObservableObject {
         var lastD = start
         func wait() {
             guard stopSeconds > 0, let l = out.last else { return }
-            for _ in 0..<stopSeconds { out.append(Sample(c: l.c, course: l.course, speed: 0, dist: travelled, wait: true, pathD: lastD)) }
+            for _ in 0..<stopSeconds { out.append(Sample(c: l.c, course: l.course, speed: 0, dist: travelled, wait: true, pathD: lastD, dir: l.dir)) }
         }
         func leg(from: Double, to: Double) {
             let dir: Double = to >= from ? 1 : -1
@@ -1626,7 +1673,7 @@ final class RouteRunner: ObservableObject {
             var next = 0
             while dir > 0 ? d < to : d > to {
                 if vary { factor = min(max(factor + Double.random(in: -0.08...0.08), 0.8), 1.2) } else { factor = 1 }
-                let v = speedKmh * factor / 3.6
+                let v = legSpeed(d, dir) * factor / 3.6
                 var nd = d + dir * v
                 var atStop = false
                 if next < ms.count, dir > 0 ? nd >= ms[next] : nd <= ms[next] { nd = ms[next]; next += 1; atStop = true }
@@ -1635,7 +1682,7 @@ final class RouteRunner: ObservableObject {
                 d = nd
                 lastD = d
                 let (c, k) = pos(d, dir)
-                out.append(Sample(c: c, course: k, speed: v, dist: travelled, wait: false, pathD: d))
+                out.append(Sample(c: c, course: k, speed: v, dist: travelled, wait: false, pathD: d, dir: dir))
                 if atStop { wait() }
                 if out.count > 200_000 { return }
             }
@@ -1643,6 +1690,13 @@ final class RouteRunner: ObservableObject {
         if first {
             let (c0, k0) = pos(start, 1)
             out.append(Sample(c: c0, course: k0, speed: 0, dist: travelled, wait: false, pathD: start))
+        }
+        if startDir < 0 && end != .stop {
+            leg(from: start, to: 0)
+            if end == .back { return (out, nil) }
+            let ls = out.count
+            wait(); leg(from: 0, to: total); wait(); leg(from: total, to: 0)
+            return (out, out.count > ls ? ls : nil)
         }
         leg(from: start, to: total)
         switch end {
@@ -1717,6 +1771,13 @@ struct RouteBanner: View {
                 }
                 Spacer(minLength: 4)
                 if runner.state != .arrived {
+                    HStack(spacing: 0) {
+                        RepeatButton(systemImage: "minus") { runner.changeSpeed(by: -step) }
+                        Text("\(Int(runner.currentLegSpeed.rounded()))")
+                            .font(.footnote.weight(.bold).monospacedDigit()).frame(minWidth: 30)
+                        RepeatButton(systemImage: "plus") { runner.changeSpeed(by: step) }
+                    }
+                    .background(Capsule().fill(Color(.systemBackground).opacity(0.8)))
                     Button { runner.togglePause() } label: {
                         Image(systemName: runner.state == .paused ? "play.fill" : "pause.fill")
                             .font(.system(size: 14, weight: .bold)).foregroundColor(.white)
@@ -1755,6 +1816,8 @@ struct RouteBanner: View {
             .shadow(color: .black.opacity(0.15), radius: 5, y: 2)
         }
     }
+
+    private var step: Double { UserDefaults.standard.bool(forKey: "routeWalking") ? 1 : 5 }
 
     private var title: String {
         switch runner.state {
@@ -1861,7 +1924,7 @@ struct PointPickerSections: View {
 
 struct RouteSetupView: View {
     var pinCoordinate: CLLocationCoordinate2D?
-    var onStart: ([CLLocationCoordinate2D], [Double], Double, Bool, Int, RouteEnd) -> Void
+    var onStart: ([CLLocationCoordinate2D], [Double], Double, [Double], Bool, Int, RouteEnd) -> Void
     @Environment(\.dismiss) private var dismiss
     @AppStorage("routeWalking") private var walking = false
     @AppStorage("routeSpeedCar") private var speedCar: String = "40"
@@ -1872,6 +1935,49 @@ struct RouteSetupView: View {
     @AppStorage("routeSystemPlayback") private var systemPlayback = true
     @State private var picked: [Bookmark] = RouteRunner.shared.points
     @State private var busy: String? = nil
+    @State private var segSpeeds: [String: Double] = [:]          // custom speed per leg (key = from>to)
+
+    private func segKey(_ i: Int) -> String {
+        guard picked.indices.contains(i + 1) else { return "" }
+        let a = picked[i], b = picked[i + 1]
+        return String(format: "%.6f,%.6f>%.6f,%.6f", a.lat, a.long, b.lat, b.long)
+    }
+
+    @ViewBuilder private var segmentsSection: some View {
+        if picked.count >= 2 {
+            let base = speed ?? 40
+            let step: Double = walking ? 1 : 5
+            Section {
+                ForEach(0..<(picked.count - 1), id: \.self) { i in
+                    let k = segKey(i)
+                    let custom = segSpeeds[k] != nil
+                    let v = segSpeeds[k] ?? base
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(L("Đoạn \(i + 1) → \(i + 2)", "Leg \(i + 1) → \(i + 2)")).font(.subheadline.weight(.semibold))
+                            Text(custom ? L("Tốc độ riêng", "Own speed") : L("Theo tốc độ chung", "Uses the main speed"))
+                                .font(.caption).foregroundColor(custom ? .accentColor : .secondary)
+                        }
+                        Spacer()
+                        if custom {
+                            Button { segSpeeds[k] = nil } label: { Image(systemName: "arrow.uturn.backward.circle").foregroundColor(.secondary) }
+                                .buttonStyle(.borderless)
+                        }
+                        Button { segSpeeds[k] = max(v - step, 1) } label: { Image(systemName: "minus.circle.fill").font(.title3) }
+                            .buttonStyle(.borderless)
+                        Text("\(Int(v.rounded())) km/h").font(.subheadline.monospacedDigit())
+                            .foregroundColor(custom ? .accentColor : .primary).frame(minWidth: 64)
+                        Button { segSpeeds[k] = min(v + step, 300) } label: { Image(systemName: "plus.circle.fill").font(.title3) }
+                            .buttonStyle(.borderless)
+                    }
+                }
+            } header: {
+                Text(L("Tốc độ từng đoạn", "Speed per leg"))
+            } footer: {
+                Text(L("Mặc định mọi đoạn theo tốc độ chung. Bấm – / + để đặt tốc độ riêng cho đoạn đó.", "Every leg uses the main speed unless you change it with – / +."))
+            }
+        }
+    }
 
     private var speedBinding: Binding<String> { walking ? $speedWalk : $speedCar }
     private var speed: Double? { Double(speedBinding.wrappedValue.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)) }
@@ -1909,6 +2015,7 @@ struct RouteSetupView: View {
                            "The first point is A, the last is B, points in between are stops. Roads come from Apple Maps. \"Let iOS play the trip\" on: keeps moving even if the app is closed. Off: the app drives it and keeps running in the background (blue location icon)."))
                 }
 
+                segmentsSection
                 PointPickerSections(picked: $picked, pinCoordinate: pinCoordinate, numberLabel: { i, _ in "\(i + 1)" })
             }
             .navigationTitle(L("Đi theo đường", "Follow roads"))
@@ -1944,7 +2051,9 @@ struct RouteSetupView: View {
             busy = nil
             switch result {
             case .success(let (path, marks)):
-                onStart(path, marks, speed ?? 40, vary, Int(stopSecText) ?? 0, RouteEnd(rawValue: endRaw) ?? .stop)
+                let base = speed ?? 40
+                let legs = (0..<max(picked.count - 1, 1)).map { segSpeeds[segKey($0)] ?? base }
+                onStart(path, marks, base, legs, vary, Int(stopSecText) ?? 0, RouteEnd(rawValue: endRaw) ?? .stop)
                 dismiss()
             case .failure(let e):
                 UIApplication.shared.alert(body: L("Không tìm được đường: ", "Could not find a route: ") + e.localizedDescription)
@@ -2258,5 +2367,40 @@ struct MapSearchBar: View {
             hideKeyboard()
             onPick(item.placemark.coordinate, name)
         }
+    }
+}
+
+/// Button that repeats while held (for – / + speed).
+struct RepeatButton: View {
+    var systemImage: String
+    var action: () -> Void
+    @State private var timer: Timer?
+    @State private var pressed = false
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 14, weight: .bold))
+            .foregroundColor(.accentColor)
+            .frame(width: 30, height: 32)
+            .contentShape(Rectangle())
+            .opacity(pressed ? 0.5 : 1)
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    guard !pressed else { return }
+                    pressed = true
+                    action()
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    let t = Timer(timeInterval: 0.45, repeats: false) { _ in
+                        let r = Timer(timeInterval: 0.15, repeats: true) { _ in action() }
+                        RunLoop.main.add(r, forMode: .common)
+                        timer = r
+                    }
+                    RunLoop.main.add(t, forMode: .common)
+                    timer = t
+                }
+                .onEnded { _ in
+                    pressed = false
+                    timer?.invalidate(); timer = nil
+                })
     }
 }
