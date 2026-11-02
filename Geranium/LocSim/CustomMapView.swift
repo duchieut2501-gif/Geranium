@@ -8,6 +8,7 @@
 
 import SwiftUI
 import MapKit
+import GoogleMaps
 
 struct CustomMapView: UIViewRepresentable {
     /// Coordinate currently under the centre pin.
@@ -189,5 +190,118 @@ struct ZoomSlider: View {
         }
         .padding(.vertical, 10)
         .background(Capsule().fill(.ultraThinMaterial))
+    }
+}
+
+// MARK: - Google Maps (same behaviour as the Apple map above)
+
+/// Google Maps needs the API key once, before the first map is created.
+enum GoogleMapsSetup {
+    private(set) static var providedKey: String? = nil
+    /// Returns false if no key. A changed key needs an app restart (Google allows setting it only once).
+    static func ensure(_ key: String) -> Bool {
+        let k = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !k.isEmpty else { return false }
+        if providedKey == nil {
+            GMSServices.provideAPIKey(k)
+            providedKey = k
+        }
+        return true
+    }
+}
+
+/// Google zoom levels 3…21 mapped to the slider 0…1.
+enum GoogleZoom {
+    static let minZ: Float = 3, maxZ: Float = 21
+    static func zoom(for level: Double) -> Float { minZ + Float(min(max(level, 0), 1)) * (maxZ - minZ) }
+    static func level(for zoom: Float) -> Double { Double((min(max(zoom, minZ), maxZ) - minZ) / (maxZ - minZ)) }
+    static let standard: Float = 16.5   // about 600 m across, like the Apple map at start
+}
+
+struct GoogleMapView: UIViewRepresentable {
+    @Binding var centerCoordinate: CLLocationCoordinate2D?
+    var recenterTick: Int
+    var focusCoordinate: EquatableCoordinate?
+    var zoomRequest: ZoomRequest? = nil
+    var onZoomChanged: ((Double) -> Void)? = nil
+    var mapType: String = "standard"
+
+    func makeUIView(context: Context) -> GMSMapView {
+        let options = GMSMapViewOptions()
+        options.camera = GMSCameraPosition(latitude: 21.0285, longitude: 105.8542, zoom: GoogleZoom.standard)
+        let map = GMSMapView(options: options)
+        map.delegate = context.coordinator
+        map.isMyLocationEnabled = true
+        map.settings.myLocationButton = false
+        map.settings.compassButton = true
+        map.settings.rotateGestures = true
+        context.coordinator.map = map
+        context.coordinator.observeMyLocation()
+        return map
+    }
+
+    func updateUIView(_ map: GMSMapView, context: Context) {
+        let c = context.coordinator
+        c.parent = self
+        let wanted: GMSMapViewType = mapType == "satellite" ? .satellite : (mapType == "hybrid" ? .hybrid : .normal)
+        if map.mapType != wanted { map.mapType = wanted }
+
+        if recenterTick != c.lastRecenterTick {
+            c.lastRecenterTick = recenterTick
+            if let loc = map.myLocation?.coordinate {
+                map.animate(toLocation: loc)          // keep the current zoom
+            }
+        }
+        if focusCoordinate == nil { c.lastFocus = nil }
+        if let focus = focusCoordinate, focus != c.lastFocus {
+            c.lastFocus = focus
+            map.animate(toLocation: focus.coordinate)
+        }
+        if let z = zoomRequest, z.id != c.lastZoomID {
+            c.lastZoomID = z.id
+            if z.reset {
+                map.animate(toZoom: GoogleZoom.standard)
+            } else {
+                c.applyingZoom = true
+                map.moveCamera(GMSCameraUpdate.zoom(to: GoogleZoom.zoom(for: z.level)))   // centre stays put
+            }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    class Coordinator: NSObject, GMSMapViewDelegate {
+        var parent: GoogleMapView
+        weak var map: GMSMapView?
+        var lastRecenterTick = 0
+        var lastFocus: EquatableCoordinate?
+        var lastZoomID: UUID?
+        var applyingZoom = false
+        private var didInitialCenter = false
+        private var observation: NSKeyValueObservation?
+
+        init(_ parent: GoogleMapView) { self.parent = parent }
+
+        /// Centre on the device once when the map opens.
+        func observeMyLocation() {
+            observation = map?.observe(\.myLocation, options: [.new]) { [weak self] map, _ in
+                guard let self, !self.didInitialCenter, let loc = map.myLocation?.coordinate else { return }
+                self.didInitialCenter = true
+                DispatchQueue.main.async {
+                    map.moveCamera(GMSCameraUpdate.setTarget(loc, zoom: GoogleZoom.standard))
+                }
+            }
+        }
+
+        func mapView(_ mapView: GMSMapView, idleAt position: GMSCameraPosition) {
+            let center = position.target
+            let level = GoogleZoom.level(for: position.zoom)
+            let fromSlider = applyingZoom
+            applyingZoom = false
+            DispatchQueue.main.async {
+                self.parent.centerCoordinate = center
+                if !fromSlider { self.parent.onZoomChanged?(level) }
+            }
+        }
     }
 }
