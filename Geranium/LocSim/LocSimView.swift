@@ -193,9 +193,11 @@ struct LocSimView: View {
             // Vertical zoom slider at the right edge: drag down = zoom in, up = zoom out. Centre stays put.
             HStack {
                 Spacer()
-                ZoomSlider(level: $zoomLevel) { level in
+                ZoomSlider(level: $zoomLevel, onChange: { level in
                     zoomRequest = ZoomRequest(level: level)
-                }
+                }, onReset: {
+                    zoomRequest = ZoomRequest(reset: true)
+                })
                 .padding(.trailing, 6)
             }
 

@@ -44,6 +44,11 @@ struct CustomMapView: UIViewRepresentable {
                 mapView.setCenter(loc, animated: true)   // keep the current zoom level
             }
         }
+        if let z = zoomRequest, z.id != c.lastZoomID, z.reset {
+            c.lastZoomID = z.id
+            mapView.setRegion(MKCoordinateRegion(center: mapView.centerCoordinate,
+                                                 latitudinalMeters: 600, longitudinalMeters: 600), animated: true)
+        }
         if let z = zoomRequest, z.id != c.lastZoomID {
             c.lastZoomID = z.id
             let cam = mapView.camera.copy() as! MKMapCamera
@@ -124,7 +129,9 @@ struct CenterPin: View {
 
 struct ZoomRequest: Equatable {
     let id = UUID()
-    let level: Double
+    var level: Double = 0.5
+    /// true = back to the standard zoom (about 600 m across, like when the app opens).
+    var reset: Bool = false
 }
 
 /// Maps slider level 0…1 to camera distance (log scale): 0 = 400 km, 1 = 15 m.
@@ -144,10 +151,20 @@ enum ZoomScale {
 struct ZoomSlider: View {
     @Binding var level: Double
     var onChange: (Double) -> Void
+    var onReset: () -> Void = {}
     private let height: CGFloat = 220
 
     var body: some View {
         VStack(spacing: 6) {
+            // Reset to the standard zoom
+            Button(action: onReset) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(.accentColor)
+                    .frame(width: 26, height: 26)
+                    .background(Circle().fill(Color(.systemBackground)))
+                    .shadow(color: .black.opacity(0.15), radius: 2, y: 1)
+            }
             Image(systemName: "minus").font(.system(size: 11, weight: .bold)).foregroundColor(.secondary)
             ZStack(alignment: .top) {
                 Capsule().fill(Color.secondary.opacity(0.35)).frame(width: 4, height: height)
