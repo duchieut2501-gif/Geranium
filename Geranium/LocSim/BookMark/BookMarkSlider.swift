@@ -44,6 +44,10 @@ struct LocationListView: View {
     @State private var editing: PlaceEdit? = nil
     @State private var folderEdit: FolderEdit? = nil
     @FocusState private var searchFocused: Bool
+    /// Left simulate icon — grows with the system text size (Dynamic Type).
+    @ScaledMetric(relativeTo: .body) private var rowIconSize: CGFloat = 29
+    @ScaledMetric(relativeTo: .body) private var rowIconWidth: CGFloat = 42
+    @ScaledMetric(relativeTo: .body) private var rowIconHeight: CGFloat = 34
 
     private var sortRaw: Binding<String> { list == .history ? $sortHistory : $sortBookmarks }
     private var sort: BookmarkSort { BookmarkSort(rawValue: sortRaw.wrappedValue) ?? .az }
@@ -172,9 +176,9 @@ struct LocationListView: View {
                 reload()
             } label: {
                 Image(systemName: "location.viewfinder")
-                    .font(.system(size: 29, weight: isActive(item) ? .semibold : .light))
+                    .font(.system(size: rowIconSize, weight: isActive(item) ? .semibold : .light))
                     .foregroundColor(isActive(item) ? .red : .secondary)
-                    .frame(width: 42, height: 34)
+                    .frame(width: rowIconWidth, height: rowIconHeight)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
