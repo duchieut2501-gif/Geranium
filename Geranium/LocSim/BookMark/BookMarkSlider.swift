@@ -233,7 +233,52 @@ struct LocationListView: View {
                 Label(L("Thêm vào Đánh dấu", "Add to Bookmarks"), systemImage: "bookmark")
             }
         }
+        saveToListMenu(item)
         Button(role: .destructive) { remove(item) } label: { Label(L("Xoá", "Delete"), systemImage: "trash") }
+    }
+
+    /// "Save to list" submenu: tick = place is in that list (Bookmarks), tap toggles it.
+    /// From History it saves the place into Bookmarks inside the chosen list.
+    @ViewBuilder
+    private func saveToListMenu(_ item: Bookmark) -> some View {
+        let allLists = loadFolders()
+        Menu {
+            ForEach(allLists, id: \.self) { f in
+                let inList = list == .bookmarks && item.folders.contains(f)
+                Button { toggleList(item, f) } label: {
+                    if inList { Label(f, systemImage: "checkmark") } else { Text(f) }
+                }
+            }
+            if !allLists.isEmpty { Divider() }
+            Button { askNewListFor(item) } label: { Label(L("Danh sách mới…", "New list…"), systemImage: "folder.badge.plus") }
+        } label: {
+            Label(L("Lưu vào danh sách", "Save to list"), systemImage: "folder.badge.plus")
+        }
+    }
+
+    private func toggleList(_ item: Bookmark, _ f: String) {
+        if list == .bookmarks {
+            var lists = item.folders
+            let removing = lists.contains(f)
+            if removing { lists.removeAll { $0 == f } } else { lists.append(f) }
+            updateItem(.bookmarks, id: item.id, name: item.name, lat: item.lat, long: item.long, folders: lists)
+            AlertKitAPI.present(title: removing ? L("Đã bỏ khỏi \"\(f)\"", "Removed from \"\(f)\"") : L("Đã lưu vào \"\(f)\"", "Saved to \"\(f)\""),
+                                icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        } else {
+            _ = addToBookmarks(name: item.name, lat: item.lat, long: item.long, folders: [f])
+            AlertKitAPI.present(title: L("Đã lưu vào \"\(f)\"", "Saved to \"\(f)\""), icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        }
+        reload()
+    }
+
+    private func askNewListFor(_ item: Bookmark) {
+        searchFocused = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            textPrompt(title: L("Danh sách mới", "New list"), placeholder: L("Tên danh sách", "List name"), text: "") { name in
+                createFolder(name)
+                toggleList(item, name)
+            }
+        }
     }
 
     /// The place currently being simulated (within 5 m).
@@ -323,10 +368,12 @@ struct LocationListView: View {
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
             Spacer()
-            Button { askRenameFolder(folder) } label: { Image(systemName: "pencil") }
+            Button { askRenameFolder(folder) } label: {
+                Image(systemName: "pencil.circle").font(.system(size: 27)).frame(width: 40, height: 40)
+            }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 6)
+        .padding(.vertical, 2)
         .background(Color(.secondarySystemBackground))
     }
 
