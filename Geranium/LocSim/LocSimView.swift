@@ -1950,6 +1950,7 @@ struct PickMapView: UIViewRepresentable {
     var start: CLLocationCoordinate2D?                  // map coordinate to open at
     var markers: [(String, CLLocationCoordinate2D)]     // label + map coordinate
     @Binding var center: CLLocationCoordinate2D?
+    var recenterTick: Int = 0
 
     func makeUIView(context: Context) -> MKMapView {
         let m = MKMapView()
@@ -1965,6 +1966,10 @@ struct PickMapView: UIViewRepresentable {
     func updateUIView(_ m: MKMapView, context: Context) {
         let sig = markers.map { "\($0.0)|\($0.1.latitude),\($0.1.longitude)" }.joined(separator: ";")
         context.coordinator.parent = self
+        if recenterTick != context.coordinator.lastRecenter {
+            context.coordinator.lastRecenter = recenterTick
+            if let loc = m.userLocation.location?.coordinate, CLLocationCoordinate2DIsValid(loc) { m.setCenter(loc, animated: true) }
+        }
         guard sig != context.coordinator.lastSig else { return }
         context.coordinator.lastSig = sig
         m.removeAnnotations(m.annotations.filter { !($0 is MKUserLocation) })
@@ -1981,6 +1986,7 @@ struct PickMapView: UIViewRepresentable {
     class Coordinator: NSObject, MKMapViewDelegate {
         var parent: PickMapView
         var lastSig = ""
+        var lastRecenter = 0
         init(_ p: PickMapView) { parent = p }
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
@@ -2010,6 +2016,7 @@ struct MapPointPicker: View {
     var numberLabel: (Int, Int) -> String
     @Environment(\.dismiss) private var dismiss
     @State private var center: CLLocationCoordinate2D? = nil
+    @State private var recenterTick = 0
 
     private var markers: [(String, CLLocationCoordinate2D)] {
         picked.enumerated().map { (numberLabel($0.offset, picked.count), CoordTransform.wgs84ToGcj02($0.element.coordinate)) }
@@ -2018,9 +2025,26 @@ struct MapPointPicker: View {
     var body: some View {
         NavigationView {
             ZStack {
-                PickMapView(start: start, markers: markers, center: $center)
+                PickMapView(start: start, markers: markers, center: $center, recenterTick: recenterTick)
                     .ignoresSafeArea(edges: .bottom)
                 CenterPin()
+                // Current location button (bottom right, above the add buttons)
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Button { recenterTick += 1 } label: {
+                            Image(systemName: "location")
+                                .font(.system(size: 22, weight: .semibold))
+                                .foregroundColor(.accentColor)
+                                .frame(width: 48, height: 48)
+                                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color(.systemBackground)))
+                                .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+                        }
+                        .padding(.trailing, 16)
+                        .padding(.bottom, 140)
+                    }
+                }
                 VStack(spacing: 10) {
                     Spacer()
                     if let c = center {
