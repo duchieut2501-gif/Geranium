@@ -78,8 +78,6 @@ struct LocSimView: View {
     @AppStorage("activeLoc") private var activeLoc: String = ""
     @AppStorage("appLanguage") private var appLanguage: String = "en"
     @AppStorage("mapType") private var mapType: String = "standard"
-    @AppStorage("mapProvider") private var mapProvider: String = "apple"
-    @AppStorage("googleMapsKey") private var googleMapsKey: String = ""
 
     var body: some View {
         NavigationView {
@@ -164,24 +162,13 @@ struct LocSimView: View {
 
     private var mapContent: some View {
         ZStack {
-            Group {
-                if mapProvider == "google" && GoogleMapsSetup.ensure(googleMapsKey) {
-                    GoogleMapView(centerCoordinate: $centerCoordinate,
-                                  recenterTick: recenterTick,
-                                  focusCoordinate: focusCoordinate,
-                                  zoomRequest: zoomRequest,
-                                  onZoomChanged: { zoomLevel = $0 },
-                                  mapType: mapType)
-                } else {
-                    CustomMapView(centerCoordinate: $centerCoordinate,
-                                  recenterTick: recenterTick,
-                                  focusCoordinate: focusCoordinate,
-                                  zoomRequest: zoomRequest,
-                                  onZoomChanged: { zoomLevel = $0 },
-                                  mapType: mapType)
-                }
-            }
-            .ignoresSafeArea(edges: .bottom)
+            CustomMapView(centerCoordinate: $centerCoordinate,
+                          recenterTick: recenterTick,
+                          focusCoordinate: focusCoordinate,
+                          zoomRequest: zoomRequest,
+                          onZoomChanged: { zoomLevel = $0 },
+                          mapType: mapType)
+                .ignoresSafeArea(edges: .bottom)
 
             CenterPin()
 
@@ -601,8 +588,6 @@ struct CustomizeAppView: View {
     @AppStorage("textSize") private var textSize: String = TextSizeOption.small.rawValue
     @AppStorage("appLanguage") private var appLanguage: String = "en"
     @AppStorage("mapType") private var mapType: String = "standard"
-    @AppStorage("mapProvider") private var mapProvider: String = "apple"
-    @AppStorage("googleMapsKey") private var googleMapsKey: String = ""
     @State private var manualLat = ""
     @State private var manualLong = ""
     @State private var choice = AppIconChoice(rawValue: AppCustomizer.storedChoice) ?? .e
@@ -691,28 +676,6 @@ struct CustomizeAppView: View {
                 }
 
                 Section {
-                    Picker(L("Bản đồ", "Map"), selection: $mapProvider) {
-                        Text("Apple Maps").tag("apple")
-                        Text("Google Maps").tag("google")
-                    }
-                    .pickerStyle(.segmented)
-                    if mapProvider == "google" {
-                        TextField(L("Dán mã API Google (AIza…)", "Paste Google API key (AIza…)"), text: $googleMapsKey)
-                            .font(.system(.footnote, design: .monospaced))
-                            .disableAutocorrection(true)
-                            .autocapitalization(.none)
-                    }
-                } header: {
-                    Text(L("Nhà cung cấp bản đồ", "Map provider"))
-                } footer: {
-                    if mapProvider == "google" {
-                        Text(googleMapsKey.trimmingCharacters(in: .whitespaces).isEmpty
-                             ? L("Chưa có mã API nên vẫn dùng Apple Maps.", "No API key yet, so Apple Maps is used.")
-                             : L("Đổi mã API thì cần tắt hẳn app rồi mở lại.", "After changing the key, close the app completely and reopen it."))
-                    }
-                }
-
-                Section {
                     Picker(L("Kiểu bản đồ", "Map type"), selection: $mapType) {
                         Text(L("Thường", "Standard")).tag("standard")
                         Text(L("Vệ tinh", "Satellite")).tag("satellite")
@@ -720,7 +683,7 @@ struct CustomizeAppView: View {
                     }
                     .pickerStyle(.segmented)
                 } header: {
-                    Text(L("Kiểu bản đồ", "Map type"))
+                    Text(L("Bản đồ (Apple Maps)", "Map (Apple Maps)"))
                 } footer: {
                     Text(L("Lai = ảnh vệ tinh có tên đường.", "Hybrid = satellite imagery with street names."))
                 }

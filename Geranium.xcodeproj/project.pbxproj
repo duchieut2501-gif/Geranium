@@ -25,7 +25,6 @@
 		796072E82B4F4FAE00737B5D /* MainInterface.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 796072E62B4F4FAE00737B5D /* MainInterface.storyboard */; };
 		796072EC2B4F4FAE00737B5D /* Bookmark Location in Geranium.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 796072DE2B4F4FAE00737B5D /* Bookmark Location in Geranium.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7969F91A2B5E57DE0010DBE5 /* AlertKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7969F9192B5E57DE0010DBE5 /* AlertKit */; };
-		7A1F00012C0000000000AB01 /* GoogleMaps in Frameworks */ = {isa = PBXBuildFile; productRef = 7A1F00032C0000000000AB03 /* GoogleMaps */; };
 		7989FD032B347EEA00FBAB8D /* LocSimView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7989FD022B347EEA00FBAB8D /* LocSimView.swift */; };
 		7989FD062B3486B100FBAB8D /* CustomMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7989FD052B3486B100FBAB8D /* CustomMapView.swift */; };
 		7989FD082B34894400FBAB8D /* BookMarkSlider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7989FD072B34894400FBAB8D /* BookMarkSlider.swift */; };
@@ -171,7 +170,6 @@
 				7930B46D2B4B2AD800A5B0CB /* MobileCoreServices.framework in Frameworks */,
 				7930B46E2B4B2ADD00A5B0CB /* CoreServices.framework in Frameworks */,
 				7969F91A2B5E57DE0010DBE5 /* AlertKit in Frameworks */,
-				7A1F00012C0000000000AB01 /* GoogleMaps in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -412,7 +410,6 @@
 			name = Geranium;
 			packageProductDependencies = (
 				7969F9192B5E57DE0010DBE5 /* AlertKit */,
-				7A1F00032C0000000000AB03 /* GoogleMaps */,
 			);
 			productName = Geranium;
 			productReference = FAA456D12B265FEA00FC7287 /* Geranium.app */;
@@ -509,7 +506,6 @@
 			mainGroup = FAA456C82B265FEA00FC7287;
 			packageReferences = (
 				7969F9182B5E57DE0010DBE5 /* XCRemoteSwiftPackageReference "AlertKit" */,
-				7A1F00022C0000000000AB02 /* XCRemoteSwiftPackageReference "ios-maps-sdk" */,
 			);
 			productRefGroup = FAA456D22B265FEA00FC7287 /* Products */;
 			projectDirPath = "";
@@ -1047,14 +1043,6 @@
 				minimumVersion = 5.1.8;
 			};
 		};
-		7A1F00022C0000000000AB02 /* XCRemoteSwiftPackageReference "ios-maps-sdk" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/googlemaps/ios-maps-sdk";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 9.0.0;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1062,11 +1050,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 7969F9182B5E57DE0010DBE5 /* XCRemoteSwiftPackageReference "AlertKit" */;
 			productName = AlertKit;
-		};
-		7A1F00032C0000000000AB03 /* GoogleMaps */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 7A1F00022C0000000000AB02 /* XCRemoteSwiftPackageReference "ios-maps-sdk" */;
-			productName = GoogleMaps;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
