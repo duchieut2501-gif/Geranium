@@ -22,12 +22,16 @@ struct CustomMapView: UIViewRepresentable {
     var onZoomChanged: ((Double) -> Void)? = nil
     /// "standard", "satellite" or "hybrid" (Settings).
     var mapType: String = "standard"
+    /// Increment to turn the map back to north-up.
+    var northTick: Int = 0
+    /// Reports the map heading (degrees, 0 = north up) while the map turns.
+    var onHeadingChanged: ((Double) -> Void)? = nil
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
         mapView.showsUserLocation = true
-        mapView.showsCompass = true
+        mapView.showsCompass = false   // own compass button (above the location button)
         mapView.pointOfInterestFilter = .includingAll
         // Allow zooming in closer than the default limit.
         mapView.setCameraZoomRange(MKMapView.CameraZoomRange(minCenterCoordinateDistance: 15), animated: false)
@@ -43,6 +47,12 @@ struct CustomMapView: UIViewRepresentable {
             if let loc = mapView.userLocation.location?.coordinate, CLLocationCoordinate2DIsValid(loc) {
                 mapView.setCenter(loc, animated: true)   // keep the current zoom level
             }
+        }
+        if northTick != c.lastNorthTick {
+            c.lastNorthTick = northTick
+            let cam = mapView.camera.copy() as! MKMapCamera
+            cam.heading = 0
+            mapView.setCamera(cam, animated: true)
         }
         if let z = zoomRequest, z.id != c.lastZoomID, z.reset {
             c.lastZoomID = z.id
@@ -71,6 +81,8 @@ struct CustomMapView: UIViewRepresentable {
     class Coordinator: NSObject, MKMapViewDelegate {
         var parent: CustomMapView
         var lastRecenterTick = 0
+        var lastNorthTick = 0
+        private var lastHeading: Double = 0
         var lastFocus: EquatableCoordinate?
         var lastZoomID: UUID?
         var applyingZoom = false
@@ -80,7 +92,19 @@ struct CustomMapView: UIViewRepresentable {
             self.parent = parent
         }
 
+        func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
+            reportHeading(mapView)
+        }
+
+        private func reportHeading(_ mapView: MKMapView) {
+            let h = mapView.camera.heading
+            guard abs(h - lastHeading) > 0.1 else { return }
+            lastHeading = h
+            DispatchQueue.main.async { self.parent.onHeadingChanged?(h) }
+        }
+
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            reportHeading(mapView)
             let center = mapView.centerCoordinate
             let level = ZoomScale.level(for: mapView.camera.centerCoordinateDistance)
             let fromSlider = applyingZoom

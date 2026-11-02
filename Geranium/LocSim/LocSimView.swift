@@ -66,6 +66,10 @@ struct LocSimView: View {
     @State private var tab: MainTab = .map
     @State private var centerCoordinate: CLLocationCoordinate2D? = nil
     @State private var recenterTick = 0
+    @State private var northTick = 0
+    @State private var mapHeading: Double = 0
+    /// Compass shows only while the map is turned away from north.
+    private var mapRotated: Bool { let h = mapHeading.truncatingRemainder(dividingBy: 360); return min(abs(h), 360 - abs(h)) > 0.5 }
     @State private var focusCoordinate: EquatableCoordinate? = nil
     @State private var isFaking = false
     @State private var settingsSheet = false
@@ -168,7 +172,9 @@ struct LocSimView: View {
                           focusCoordinate: focusCoordinate,
                           zoomRequest: zoomRequest,
                           onZoomChanged: { zoomLevel = $0 },
-                          mapType: mapType)
+                          mapType: mapType,
+                          northTick: northTick,
+                          onHeadingChanged: { mapHeading = $0 })
                 .ignoresSafeArea(edges: .bottom)
 
             CenterPin()
@@ -245,6 +251,16 @@ struct LocSimView: View {
                     }
                     Spacer()
                     VStack(spacing: 10) {
+                    // Compass: appears when the map is rotated, turns with it; tap = north up
+                    if mapRotated {
+                        Button { northTick += 1 } label: {
+                            CompassFace(heading: mapHeading)
+                                .frame(width: 48, height: 48)
+                                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color(.systemBackground)))
+                                .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+                        }
+                        .transition(.scale(scale: 0.3).combined(with: .opacity))
+                    }
                     // Go to my real location
                     Button { recenterTick += 1 } label: {
                         Image(systemName: "location")
@@ -258,6 +274,7 @@ struct LocSimView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 24)
+                .animation(.easeInOut(duration: 0.2), value: mapRotated)
             }
         }
     }
@@ -964,5 +981,34 @@ struct IconCropView: View {
             image.draw(in: CGRect(x: -origin.x * f, y: -origin.y * f,
                                   width: image.size.width * f, height: image.size.height * f))
         }
+    }
+}
+
+
+/// Compass needle (red = north). Turns opposite to the map heading so it always points to real north.
+struct CompassFace: View {
+    var heading: Double
+    var body: some View {
+        ZStack {
+            Circle().stroke(Color(.tertiaryLabel), lineWidth: 1).padding(6)
+            VStack(spacing: 0) {
+                Text("N").font(.system(size: 9, weight: .bold)).foregroundColor(.red)
+                Triangle().fill(Color.red).frame(width: 8, height: 12)
+                Triangle().fill(Color(.secondaryLabel)).frame(width: 8, height: 12).rotationEffect(.degrees(180))
+                Text("S").font(.system(size: 9, weight: .bold)).foregroundColor(.secondary)
+            }
+        }
+        .rotationEffect(.degrees(-heading))
+    }
+}
+
+struct Triangle: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.midX, y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.minX, y: r.maxY))
+        p.closeSubpath()
+        return p
     }
 }
