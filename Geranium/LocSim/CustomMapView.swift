@@ -26,6 +26,9 @@ struct CustomMapView: UIViewRepresentable {
     var northTick: Int = 0
     /// Reports the map heading (degrees, 0 = north up) while the map turns.
     var onHeadingChanged: ((Double) -> Void)? = nil
+    /// Road route to draw (map coordinates); empty = none.
+    var routePath: [CLLocationCoordinate2D] = []
+    var routeID: UUID? = nil
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
@@ -46,6 +49,13 @@ struct CustomMapView: UIViewRepresentable {
             c.lastRecenterTick = recenterTick
             if let loc = mapView.userLocation.location?.coordinate, CLLocationCoordinate2DIsValid(loc) {
                 mapView.setCenter(loc, animated: true)   // keep the current zoom level
+            }
+        }
+        if routeID != c.lastRouteID {
+            c.lastRouteID = routeID
+            mapView.removeOverlays(mapView.overlays)
+            if routePath.count >= 2 {
+                mapView.addOverlay(MKPolyline(coordinates: routePath, count: routePath.count), level: .aboveRoads)
             }
         }
         if northTick != c.lastNorthTick {
@@ -82,6 +92,7 @@ struct CustomMapView: UIViewRepresentable {
         var parent: CustomMapView
         var lastRecenterTick = 0
         var lastNorthTick = 0
+        var lastRouteID: UUID?
         private var lastHeading: Double = 0
         var lastFocus: EquatableCoordinate?
         var lastZoomID: UUID?
@@ -90,6 +101,16 @@ struct CustomMapView: UIViewRepresentable {
 
         init(_ parent: CustomMapView) {
             self.parent = parent
+        }
+
+        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            guard let line = overlay as? MKPolyline else { return MKOverlayRenderer(overlay: overlay) }
+            let r = MKPolylineRenderer(polyline: line)
+            r.strokeColor = UIColor.systemBlue.withAlphaComponent(0.8)
+            r.lineWidth = 5
+            r.lineCap = .round
+            r.lineJoin = .round
+            return r
         }
 
         func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {

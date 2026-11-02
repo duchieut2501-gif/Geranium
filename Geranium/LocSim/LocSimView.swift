@@ -11,6 +11,7 @@ import CoreLocation
 import AlertKit
 import PhotosUI
 import UIKit
+import MapKit
 
 /// Play triangle whose visual centre (centroid) sits exactly in the middle of its frame.
 struct PlayTriangle: Shape {
@@ -78,6 +79,8 @@ struct LocSimView: View {
     @State private var zoomRequest: ZoomRequest? = nil
     @State private var savePin: PlaceEdit? = nil
     @State private var hopSheet = false
+    @State private var routeSheet = false
+    @ObservedObject private var route = RouteRunner.shared
     @AppStorage("textSize") private var textSize: String = TextSizeOption.small.rawValue
     /// "lat,long" of the place being simulated ("" = none). Lists use it to mark that row red.
     @AppStorage("activeLoc") private var activeLoc: String = ""
@@ -158,9 +161,19 @@ struct LocSimView: View {
         mapContent
             .sheet(isPresented: $hopSheet) {
                 HopSetupView(pinCoordinate: centerCoordinate.map { CoordTransform.gcj02ToWgs84($0) }) { points, ms, random in
+                    RouteRunner.shared.stop()
                     HopRunner.shared.start(points: points, intervalMs: ms, random: random)
                     withAnimation(.easeInOut(duration: 0.2)) { isFaking = true }
                     AlertKitAPI.present(title: L("Bắt đầu nhảy cóc", "Hopping started"), icon: .done, style: .iOS17AppleMusic, haptic: .success)
+                }
+            }
+            .sheet(isPresented: $routeSheet) {
+                RouteSetupView(pinCoordinate: centerCoordinate.map { CoordTransform.gcj02ToWgs84($0) }) { path, marks, kmh, vary, wait, end in
+                    HopRunner.shared.stop()
+                    RouteRunner.shared.start(path: path, stopMarks: marks, speedKmh: kmh, vary: vary, stopSeconds: wait, end: end)
+                    if let first = path.first { focus(CoordTransform.wgs84ToGcj02(first)) }
+                    withAnimation(.easeInOut(duration: 0.2)) { isFaking = true }
+                    AlertKitAPI.present(title: L("Bắt đầu di chuyển", "Trip started"), icon: .done, style: .iOS17AppleMusic, haptic: .success)
                 }
             }
             .sheet(item: $savePin) { edit in
@@ -182,7 +195,9 @@ struct LocSimView: View {
                           onZoomChanged: { zoomLevel = $0 },
                           mapType: mapType,
                           northTick: northTick,
-                          onHeadingChanged: { mapHeading = $0 })
+                          onHeadingChanged: { mapHeading = $0 },
+                          routePath: route.displayPath,
+                          routeID: route.pathID)
                 .ignoresSafeArea(edges: .bottom)
 
             CenterPin()
@@ -215,7 +230,22 @@ struct LocSimView: View {
                     }
                     .padding(.trailing, 10)
                 }
+                // Follow roads A → stops → B: under the hop button
+                HStack {
+                    Spacer()
+                    Button { routeSheet = true } label: {
+                        Image(systemName: "arrow.triangle.turn.up.right.diamond")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundColor(.accentColor)
+                            .frame(width: 44, height: 44)
+                            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.systemBackground)))
+                            .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+                    }
+                    .padding(.trailing, 10)
+                }
                 HopBanner(onStop: stop)
+                    .padding(.horizontal, 12)
+                RouteBanner(onStop: stop)
                     .padding(.horizontal, 12)
                 Spacer()
             }
@@ -320,6 +350,7 @@ struct LocSimView: View {
     /// Fakes the location and logs it in History.
     private func fake(wgs: CLLocationCoordinate2D) {
         HopRunner.shared.stop()
+        RouteRunner.shared.stop()
         let location = CLLocation(coordinate: wgs, altitude: Double(altitude) ?? 0,
                                   horizontalAccuracy: 5, verticalAccuracy: 5, timestamp: Date())
         LocSimManager.startLocSim(location: location)
@@ -371,6 +402,7 @@ struct LocSimView: View {
 
     private func stop() {
         HopRunner.shared.stop()
+        RouteRunner.shared.stop()
         LocSimManager.stopLocSim()
         withAnimation(.easeInOut(duration: 0.2)) { isFaking = false }
         activeLoc = ""
@@ -1247,5 +1279,430 @@ struct HopSetupView: View {
             .onAppear { items = loadList(source) }
             .onChange(of: source) { items = loadList($0) }
         }
+    }
+}
+
+// MARK: - Drive / walk along a real road route (A → stops → B)
+
+enum RouteEnd: String, CaseIterable, Identifiable {
+    case stop, back, loop
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .stop: return L("Dừng ở điểm cuối", "Stop at the end")
+        case .back: return L("Đi ngược về điểm đầu", "Go back to the start")
+        case .loop: return L("Đi đi về về liên tục", "Back and forth forever")
+        }
+    }
+}
+
+final class RouteRunner: ObservableObject {
+    static let shared = RouteRunner()
+    enum State { case idle, running, paused, waiting, arrived }
+    @Published private(set) var state: State = .idle
+    @Published private(set) var distance: Double = 0          // metres along the path
+    @Published private(set) var total: Double = 0
+    @Published private(set) var currentSpeedKmh: Double = 0
+    @Published private(set) var waitLeft: Int = 0
+    /// Path in map (display) coordinates, for the blue line.
+    @Published private(set) var displayPath: [CLLocationCoordinate2D] = []
+    @Published private(set) var pathID = UUID()
+    @Published var points: [Bookmark] = []                   // last chosen points (kept for next time)
+
+    private var path: [CLLocationCoordinate2D] = []           // WGS-84
+    private var cum: [Double] = []                            // cumulative distance per path point
+    private var stopMarks: [Double] = []                      // distances of the in-between stops
+    private var speedKmh: Double = 40
+    private var vary = true
+    private var stopSeconds = 0
+    private var end: RouteEnd = .stop
+    private var direction: Double = 1
+    private var factor: Double = 1
+    private var timer: Timer?
+
+    var isActive: Bool { state != .idle }
+
+    /// Asks Apple Maps for the route leg by leg. Calls back on the main thread.
+    static func buildRoute(points: [Bookmark], walking: Bool,
+                           progress: @escaping (Int, Int) -> Void,
+                           done: @escaping (Result<([CLLocationCoordinate2D], [Double]), Error>) -> Void) {
+        Task {
+            var all: [CLLocationCoordinate2D] = []
+            var marks: [Double] = []
+            var run: Double = 0
+            let legs = points.count - 1
+            for i in 0..<legs {
+                await MainActor.run { progress(i + 1, legs) }
+                let req = MKDirections.Request()
+                req.source = MKMapItem(placemark: MKPlacemark(coordinate: CoordTransform.wgs84ToGcj02(points[i].coordinate)))
+                req.destination = MKMapItem(placemark: MKPlacemark(coordinate: CoordTransform.wgs84ToGcj02(points[i + 1].coordinate)))
+                req.transportType = walking ? .walking : .automobile
+                var response: MKDirections.Response?
+                for attempt in 0..<4 {
+                    do { response = try await MKDirections(request: req).calculate(); break }
+                    catch {
+                        if attempt == 3 { await MainActor.run { done(.failure(error)) }; return }
+                        try? await Task.sleep(nanoseconds: UInt64(2_000_000_000 * (attempt + 1)))   // Apple limits fast requests
+                    }
+                }
+                guard let r = response?.routes.first else {
+                    await MainActor.run { done(.failure(NSError(domain: "route", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                        L("Không tìm được đường từ điểm \(i + 1) đến điểm \(i + 2).", "No route from point \(i + 1) to point \(i + 2).")]))) }
+                    return
+                }
+                let poly = r.polyline
+                var coords = [CLLocationCoordinate2D](repeating: kCLLocationCoordinate2DInvalid, count: poly.pointCount)
+                poly.getCoordinates(&coords, range: NSRange(location: 0, length: poly.pointCount))
+                var wgs = coords.map { CoordTransform.gcj02ToWgs84($0) }
+                if !all.isEmpty, !wgs.isEmpty { wgs.removeFirst() }
+                for c in wgs {
+                    if let last = all.last { run += CLLocation(latitude: last.latitude, longitude: last.longitude)
+                        .distance(from: CLLocation(latitude: c.latitude, longitude: c.longitude)) }
+                    all.append(c)
+                }
+                if i < legs - 1 { marks.append(run) }
+                if legs > 1 { try? await Task.sleep(nanoseconds: 300_000_000) }
+            }
+            await MainActor.run { done(.success((all, marks))) }
+        }
+    }
+
+    func start(path: [CLLocationCoordinate2D], stopMarks: [Double], speedKmh: Double, vary: Bool, stopSeconds: Int, end: RouteEnd) {
+        stop()
+        guard path.count >= 2 else { return }
+        self.path = path
+        var c: [Double] = [0]
+        for i in 1..<path.count {
+            c.append(c[i - 1] + CLLocation(latitude: path[i - 1].latitude, longitude: path[i - 1].longitude)
+                .distance(from: CLLocation(latitude: path[i].latitude, longitude: path[i].longitude)))
+        }
+        cum = c
+        total = c.last ?? 0
+        self.stopMarks = stopMarks
+        self.speedKmh = max(speedKmh, 1)
+        self.vary = vary
+        self.stopSeconds = max(stopSeconds, 0)
+        self.end = end
+        direction = 1
+        factor = 1
+        distance = 0
+        displayPath = path.map { CoordTransform.wgs84ToGcj02($0) }
+        pathID = UUID()
+        state = .running
+        send(speed: 0)
+        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+    }
+
+    func togglePause() {
+        if state == .running || state == .waiting { state = .paused; currentSpeedKmh = 0; send(speed: 0) }
+        else if state == .paused { state = .running }
+    }
+
+    /// Ends the trip (the simulated location stays where it is) and removes the line.
+    func stop() {
+        timer?.invalidate(); timer = nil
+        state = .idle
+        currentSpeedKmh = 0
+        if !displayPath.isEmpty { displayPath = []; pathID = UUID() }
+    }
+
+    private func tick() {
+        switch state {
+        case .paused, .idle, .arrived: return
+        case .waiting:
+            waitLeft -= 1
+            if waitLeft <= 0 { state = .running }
+            return
+        case .running: break
+        }
+        if vary { factor = min(max(factor + Double.random(in: -0.08...0.08), 0.8), 1.2) } else { factor = 1 }
+        let v = speedKmh * factor / 3.6
+        let old = distance
+        var new = old + direction * v
+        var hitStop = false
+        // stop at in-between points
+        if stopSeconds > 0 {
+            let crossed = stopMarks.filter { direction > 0 ? ($0 > old && $0 <= new) : ($0 < old && $0 >= new) }
+            if let m = direction > 0 ? crossed.min() : crossed.max() { new = m; hitStop = true }
+        }
+        if new >= total {
+            new = total
+            if end == .stop { distance = new; send(speed: 0); finish(); return }
+            direction = -1; hitStop = stopSeconds > 0
+        } else if new <= 0 && direction < 0 {
+            new = 0
+            if end == .back { distance = new; send(speed: 0); finish(); return }
+            direction = 1; hitStop = stopSeconds > 0
+        }
+        distance = new
+        currentSpeedKmh = hitStop ? 0 : v * 3.6
+        send(speed: hitStop ? 0 : v)
+        if hitStop { waitLeft = stopSeconds; state = .waiting }
+    }
+
+    private func finish() {
+        timer?.invalidate(); timer = nil
+        currentSpeedKmh = 0
+        state = .arrived
+    }
+
+    private func position(at d: Double) -> (CLLocationCoordinate2D, Double) {
+        guard path.count >= 2 else { return (path.first ?? CLLocationCoordinate2D(), 0) }
+        var i = cum.firstIndex { $0 >= d } ?? cum.count - 1
+        i = max(i, 1)
+        let a = path[i - 1], b = path[i]
+        let seg = cum[i] - cum[i - 1]
+        let t = seg > 0 ? (d - cum[i - 1]) / seg : 0
+        let c = CLLocationCoordinate2D(latitude: a.latitude + (b.latitude - a.latitude) * t,
+                                       longitude: a.longitude + (b.longitude - a.longitude) * t)
+        var course = bearing(a, b)
+        if direction < 0 { course = (course + 180).truncatingRemainder(dividingBy: 360) }
+        return (c, course)
+    }
+
+    private func bearing(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
+        let la1 = a.latitude * .pi / 180, la2 = b.latitude * .pi / 180
+        let dLo = (b.longitude - a.longitude) * .pi / 180
+        let y = sin(dLo) * cos(la2)
+        let x = cos(la1) * sin(la2) - sin(la1) * cos(la2) * cos(dLo)
+        let deg = atan2(y, x) * 180 / .pi
+        return (deg + 360).truncatingRemainder(dividingBy: 360)
+    }
+
+    private func send(speed: Double) {
+        let (c, course) = position(at: distance)
+        let alt = Double(UserDefaults.standard.string(forKey: "locAltitude") ?? "0") ?? 0
+        LocSimManager.startLocSim(location: CLLocation(coordinate: c, altitude: alt, horizontalAccuracy: 5, verticalAccuracy: 5,
+                                                       course: course, speed: speed, timestamp: Date()))
+        UserDefaults.standard.set("\(c.latitude),\(c.longitude)", forKey: "activeLoc")
+    }
+
+    /// Map coordinate of the current position (for following on the map).
+    var displayPosition: CLLocationCoordinate2D? {
+        guard !path.isEmpty else { return nil }
+        return CoordTransform.wgs84ToGcj02(position(at: distance).0)
+    }
+}
+
+/// Banner on the map during a trip: distance, time left, speed, pause / stop.
+struct RouteBanner: View {
+    @ObservedObject var runner = RouteRunner.shared
+    var onStop: () -> Void
+    var body: some View {
+        if runner.isActive {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
+                    .font(.system(size: 18)).foregroundColor(.accentColor)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.footnote.weight(.semibold)).lineLimit(1)
+                    Text(detail).font(.caption.monospacedDigit()).foregroundColor(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                if runner.state != .arrived {
+                    Button { runner.togglePause() } label: {
+                        Image(systemName: runner.state == .paused ? "play.fill" : "pause.fill")
+                            .font(.system(size: 14, weight: .bold)).foregroundColor(.white)
+                            .frame(width: 32, height: 32).background(Circle().fill(Color.accentColor))
+                    }
+                }
+                Button(action: { runner.state == .arrived ? runner.stop() : onStop() }) {
+                    Image(systemName: runner.state == .arrived ? "xmark" : "stop.fill")
+                        .font(.system(size: 14, weight: .bold)).foregroundColor(.white)
+                        .frame(width: 32, height: 32).background(Circle().fill(runner.state == .arrived ? Color.gray : Color.red))
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial))
+            .shadow(color: .black.opacity(0.15), radius: 5, y: 2)
+        }
+    }
+
+    private var title: String {
+        switch runner.state {
+        case .paused: return L("Đã tạm dừng", "Paused")
+        case .waiting: return L("Đang dừng ở điểm dừng (\(runner.waitLeft) giây)", "Waiting at a stop (\(runner.waitLeft) s)")
+        case .arrived: return L("Đã đến nơi", "Arrived")
+        default: return L("Đang di chuyển • \(Int(runner.currentSpeedKmh.rounded())) km/h", "Moving • \(Int(runner.currentSpeedKmh.rounded())) km/h")
+        }
+    }
+
+    private var detail: String {
+        let done = runner.distance / 1000, all = runner.total / 1000
+        return String(format: "%.2f / %.2f km", done, all)
+    }
+}
+
+/// Picks an ordered list of points (Bookmarks / History / the map pin).
+struct PointPickerSections: View {
+    @Binding var picked: [Bookmark]
+    var pinCoordinate: CLLocationCoordinate2D?
+    var numberLabel: (Int, Int) -> String = { i, _ in "\(i + 1)" }
+    @State private var source: LocList = .bookmarks
+    @State private var search = ""
+    @State private var items: [Bookmark] = []
+
+    private func key(_ b: Bookmark) -> String { String(format: "%.6f,%.6f", b.lat, b.long) }
+    private func order(_ b: Bookmark) -> Int? { picked.firstIndex { key($0) == key(b) } }
+    private var shown: [Bookmark] { filterAndSort(items, search: search, sort: source == .history ? .newest : .az) }
+
+    var body: some View {
+        Section {
+            if let pin = pinCoordinate {
+                Button {
+                    picked.append(Bookmark(name: L("Điểm ghim trên bản đồ", "Map pin"), lat: pin.latitude, long: pin.longitude))
+                } label: {
+                    Label(L("Thêm điểm ghim hiện tại trên bản đồ", "Add the current map pin"), systemImage: "mappin.and.ellipse")
+                }
+            }
+            ForEach(Array(picked.enumerated()), id: \.offset) { i, b in
+                HStack {
+                    Text(numberLabel(i, picked.count)).font(.footnote.weight(.bold)).foregroundColor(.white)
+                        .frame(minWidth: 24, minHeight: 24).padding(.horizontal, 2).background(Capsule().fill(Color.accentColor))
+                    Text(b.displayName).lineLimit(1)
+                    Spacer()
+                    Text(String(format: "%.5f, %.5f", b.lat, b.long)).font(.caption.monospacedDigit()).foregroundColor(.secondary)
+                }
+            }
+            .onDelete { picked.remove(atOffsets: $0) }
+            .onMove { picked.move(fromOffsets: $0, toOffset: $1) }
+        } header: {
+            HStack {
+                Text(L("Đã chọn \(picked.count) điểm", "\(picked.count) points selected"))
+                Spacer()
+                if picked.count > 1 { EditButton().font(.footnote) }
+                if !picked.isEmpty { Button(L("Bỏ chọn hết", "Clear")) { picked = [] }.font(.footnote) }
+            }
+        } footer: {
+            Text(L("Vuốt trái để bỏ một điểm, bấm Sửa để kéo đổi thứ tự.", "Swipe left to remove a point, tap Edit to drag and reorder."))
+        }
+
+        Section {
+            Picker("", selection: $source) {
+                Text(LocList.bookmarks.title).tag(LocList.bookmarks)
+                Text(LocList.history.title).tag(LocList.history)
+            }
+            .pickerStyle(.segmented)
+            TextField(L("Tìm…", "Search…"), text: $search).disableAutocorrection(true)
+            ForEach(shown) { b in
+                Button {
+                    if let i = order(b) { picked.remove(at: i) } else { picked.append(b) }
+                } label: {
+                    HStack {
+                        if let i = order(b) {
+                            Text(numberLabel(i, picked.count)).font(.footnote.weight(.bold)).foregroundColor(.white)
+                                .frame(minWidth: 24, minHeight: 24).padding(.horizontal, 2).background(Capsule().fill(Color.accentColor))
+                        } else {
+                            Image(systemName: "circle").font(.system(size: 22)).foregroundColor(Color(.tertiaryLabel))
+                                .frame(width: 24, height: 24)
+                        }
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(b.displayName).foregroundColor(.primary).lineLimit(1)
+                            Text(String(format: "%.6f, %.6f", b.lat, b.long)).font(.caption.monospacedDigit()).foregroundColor(.secondary)
+                        }
+                        Spacer()
+                    }
+                }
+            }
+        } header: {
+            Text(L("Chọn điểm (bấm theo thứ tự đi)", "Pick points (tap in travel order)"))
+        }
+        .onAppear { items = loadList(source) }
+        .onChange(of: source) { items = loadList($0) }
+    }
+}
+
+struct RouteSetupView: View {
+    var pinCoordinate: CLLocationCoordinate2D?
+    var onStart: ([CLLocationCoordinate2D], [Double], Double, Bool, Int, RouteEnd) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("routeWalking") private var walking = false
+    @AppStorage("routeSpeedCar") private var speedCar: String = "40"
+    @AppStorage("routeSpeedWalk") private var speedWalk: String = "5"
+    @AppStorage("routeVary") private var vary = true
+    @AppStorage("routeStopSec") private var stopSecText: String = "0"
+    @AppStorage("routeEnd") private var endRaw: String = RouteEnd.stop.rawValue
+    @State private var picked: [Bookmark] = RouteRunner.shared.points
+    @State private var busy: String? = nil
+
+    private var speedBinding: Binding<String> { walking ? $speedWalk : $speedCar }
+    private var speed: Double? { Double(speedBinding.wrappedValue.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)) }
+
+    var body: some View {
+        NavigationView {
+            List {
+                Section {
+                    Picker("", selection: $walking) {
+                        Text(L("🚗 Ô tô", "🚗 Car")).tag(false)
+                        Text(L("🚶 Đi bộ", "🚶 Walking")).tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    HStack {
+                        Text(L("Tốc độ", "Speed"))
+                        Spacer()
+                        TextField(walking ? "5" : "40", text: speedBinding)
+                            .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                        Text("km/h").foregroundColor(.secondary)
+                    }
+                    Toggle(L("Tốc độ dao động cho giống thật", "Vary the speed a little"), isOn: $vary)
+                    HStack {
+                        Text(L("Dừng ở mỗi điểm dừng", "Wait at each stop"))
+                        Spacer()
+                        TextField("0", text: $stopSecText)
+                            .keyboardType(.numberPad).multilineTextAlignment(.trailing).frame(width: 70)
+                        Text(L("giây", "s")).foregroundColor(.secondary)
+                    }
+                    Picker(L("Khi đến nơi", "At the end"), selection: $endRaw) {
+                        ForEach(RouteEnd.allCases) { Text($0.label).tag($0.rawValue) }
+                    }
+                } footer: {
+                    Text(L("Điểm đầu tiên là A, điểm cuối là B, các điểm ở giữa là điểm dừng. Đường đi lấy theo Apple Maps. App cần đang mở thì vị trí mới chạy tiếp.",
+                           "The first point is A, the last is B, points in between are stops. Roads come from Apple Maps. The app must stay open to keep moving."))
+                }
+
+                PointPickerSections(picked: $picked, pinCoordinate: pinCoordinate, numberLabel: { i, n in
+                    i == 0 ? "A" : (i == n - 1 && n > 1 ? "B" : "\(i)")
+                })
+            }
+            .navigationTitle(L("Đi theo đường", "Follow roads"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) { Button(L("Huỷ", "Cancel")) { dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(L("Bắt đầu", "Start")) { begin() }
+                        .font(.body.weight(.semibold))
+                        .disabled(picked.count < 2 || (speed ?? 0) <= 0 || busy != nil)
+                }
+            }
+            .overlay {
+                if let busy {
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text(busy).font(.footnote)
+                    }
+                    .padding(20)
+                    .background(RoundedRectangle(cornerRadius: 14).fill(.regularMaterial))
+                }
+            }
+        }
+    }
+
+    private func begin() {
+        hideKeyboard()
+        RouteRunner.shared.points = picked
+        busy = L("Đang tìm đường…", "Finding the route…")
+        RouteRunner.buildRoute(points: picked, walking: walking, progress: { i, n in
+            busy = n > 1 ? L("Đang tìm đường \(i)/\(n)…", "Finding the route \(i)/\(n)…") : L("Đang tìm đường…", "Finding the route…")
+        }, done: { result in
+            busy = nil
+            switch result {
+            case .success(let (path, marks)):
+                onStart(path, marks, speed ?? 40, vary, Int(stopSecText) ?? 0, RouteEnd(rawValue: endRaw) ?? .stop)
+                dismiss()
+            case .failure(let e):
+                UIApplication.shared.alert(body: L("Không tìm được đường: ", "Could not find a route: ") + e.localizedDescription)
+            }
+        })
     }
 }
