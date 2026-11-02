@@ -172,9 +172,9 @@ struct LocationListView: View {
                 reload()
             } label: {
                 Image(systemName: "location.viewfinder")
-                    .font(.system(size: 20, weight: isActive(item) ? .semibold : .light))
+                    .font(.system(size: 34, weight: isActive(item) ? .semibold : .light))
                     .foregroundColor(isActive(item) ? .red : .secondary)
-                    .frame(width: 34, height: 34)
+                    .frame(width: 58, height: 58)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
