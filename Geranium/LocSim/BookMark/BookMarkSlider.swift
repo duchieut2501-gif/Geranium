@@ -263,7 +263,7 @@ struct LocationListView: View {
 
     private func dateText(_ t: Double) -> String {
         let f = DateFormatter()
-        f.dateFormat = appIsVietnamese ? "HH:mm 'ngày' dd/MM/yyyy" : "HH:mm, dd/MM/yyyy"
+        f.dateFormat = appIsVietnamese ? "HH:mm:ss 'ngày' dd/MM/yyyy" : "HH:mm:ss, dd/MM/yyyy"
         return f.string(from: Date(timeIntervalSince1970: t))
     }
 

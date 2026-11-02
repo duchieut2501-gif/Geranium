@@ -403,6 +403,15 @@ private let lineDateFormatter: DateFormatter = {
     let f = DateFormatter()
     f.locale = Locale(identifier: "en_US_POSIX")
     f.timeZone = .current
+    f.dateFormat = "dd/MM/yyyy HH:mm:ss"
+    return f
+}()
+
+/// Older exports have no seconds.
+private let lineDateFormatterNoSeconds: DateFormatter = {
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.timeZone = .current
     f.dateFormat = "dd/MM/yyyy HH:mm"
     return f
 }()
@@ -470,7 +479,9 @@ func parseText(_ text: String) -> [Bookmark] {
         if parts.count >= 2 {
             name = parts[0]
             coordPart = parts[1]
-            if parts.count >= 3, let d = lineDateFormatter.date(from: parts[2]) { date = d.timeIntervalSince1970 }
+            if parts.count >= 3, let d = lineDateFormatter.date(from: parts[2]) ?? lineDateFormatterNoSeconds.date(from: parts[2]) {
+                date = d.timeIntervalSince1970
+            }
             if parts.count >= 4 { lists = cleanLists(parts[3].components(separatedBy: ";")) }
             if parts.count >= 5 { fav = parts[4].contains("★") || foldForSearch(parts[4]).contains("yeu thich") }
         }
