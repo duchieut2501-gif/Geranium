@@ -109,6 +109,7 @@ struct LocSimView: View {
                         Image(systemName: "location.slash")
                             .font(.system(size: 13))
                             .foregroundColor(isFaking ? .red : .secondary)
+                            .padding(.leading, 14)
                     }
                 }
                 ToolbarItem(placement: .principal) {
