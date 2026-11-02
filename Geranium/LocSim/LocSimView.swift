@@ -77,6 +77,7 @@ struct LocSimView: View {
     @State private var zoomLevel: Double = 0.5           // 0 = far out (top), 1 = close in (bottom)
     @State private var zoomRequest: ZoomRequest? = nil
     @State private var savePin: PlaceEdit? = nil
+    @State private var hopSheet = false
     @AppStorage("textSize") private var textSize: String = TextSizeOption.small.rawValue
     /// "lat,long" of the place being simulated ("" = none). Lists use it to mark that row red.
     @AppStorage("activeLoc") private var activeLoc: String = ""
@@ -155,6 +156,13 @@ struct LocSimView: View {
 
     private var mapLayer: some View {
         mapContent
+            .sheet(isPresented: $hopSheet) {
+                HopSetupView(pinCoordinate: centerCoordinate.map { CoordTransform.gcj02ToWgs84($0) }) { points, ms, random in
+                    HopRunner.shared.start(points: points, intervalMs: ms, random: random)
+                    withAnimation(.easeInOut(duration: 0.2)) { isFaking = true }
+                    AlertKitAPI.present(title: L("Bắt đầu nhảy cóc", "Hopping started"), icon: .done, style: .iOS17AppleMusic, haptic: .success)
+                }
+            }
             .sheet(item: $savePin) { edit in
                 PlaceEditView(edit: edit, folders: loadFolders()) { r in
                     let added = addToBookmarks(name: r.name, lat: r.lat, long: r.long, folders: r.folders)
@@ -194,6 +202,21 @@ struct LocSimView: View {
                     .padding(.trailing, 10)
                     .padding(.top, 10)
                 }
+                // Hop between several points: under the keyboard button
+                HStack {
+                    Spacer()
+                    Button { hopSheet = true } label: {
+                        Image(systemName: "point.3.connected.trianglepath.dotted")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundColor(.accentColor)
+                            .frame(width: 44, height: 44)
+                            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.systemBackground)))
+                            .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+                    }
+                    .padding(.trailing, 10)
+                }
+                HopBanner(onStop: stop)
+                    .padding(.horizontal, 12)
                 Spacer()
             }
 
@@ -296,6 +319,7 @@ struct LocSimView: View {
 
     /// Fakes the location and logs it in History.
     private func fake(wgs: CLLocationCoordinate2D) {
+        HopRunner.shared.stop()
         let location = CLLocation(coordinate: wgs, altitude: Double(altitude) ?? 0,
                                   horizontalAccuracy: 5, verticalAccuracy: 5, timestamp: Date())
         LocSimManager.startLocSim(location: location)
@@ -346,6 +370,7 @@ struct LocSimView: View {
     }
 
     private func stop() {
+        HopRunner.shared.stop()
         LocSimManager.stopLocSim()
         withAnimation(.easeInOut(duration: 0.2)) { isFaking = false }
         activeLoc = ""
@@ -1010,5 +1035,217 @@ struct Triangle: Shape {
         p.addLine(to: CGPoint(x: r.minX, y: r.maxY))
         p.closeSubpath()
         return p
+    }
+}
+
+// MARK: - Hop between coordinates (nhảy cóc)
+
+/// Jumps the simulated location through several points, every `intervalMs` milliseconds,
+/// in order (looping) or at random. Runs while the app is open.
+final class HopRunner: ObservableObject {
+    static let shared = HopRunner()
+    @Published private(set) var isRunning = false
+    @Published private(set) var step = 0          // jumps done
+    @Published private(set) var currentIndex = 0
+    @Published var points: [Bookmark] = []        // last chosen points (kept for next time)
+    private(set) var intervalMs = 1000
+    private(set) var random = false
+    private var timer: Timer?
+
+    func start(points: [Bookmark], intervalMs: Int, random: Bool) {
+        stop()
+        guard points.count >= 2 else { return }
+        self.points = points
+        self.intervalMs = max(intervalMs, 100)
+        self.random = random
+        step = 0
+        currentIndex = random ? Int.random(in: 0..<points.count) : 0
+        isRunning = true
+        jump()
+        let t = Timer(timeInterval: Double(self.intervalMs) / 1000, repeats: true) { [weak self] _ in self?.next() }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        if isRunning { isRunning = false }
+    }
+
+    private func next() {
+        guard isRunning, points.count >= 2 else { stop(); return }
+        if random {
+            var i = Int.random(in: 0..<points.count - 1)
+            if i >= currentIndex { i += 1 }        // never the same point twice in a row
+            currentIndex = i
+        } else {
+            currentIndex = (currentIndex + 1) % points.count
+        }
+        jump()
+    }
+
+    private func jump() {
+        let p = points[currentIndex]
+        let alt = Double(UserDefaults.standard.string(forKey: "locAltitude") ?? "0") ?? 0
+        LocSimManager.startLocSim(location: CLLocation(coordinate: p.coordinate, altitude: alt,
+                                                       horizontalAccuracy: 5, verticalAccuracy: 5, timestamp: Date()))
+        UserDefaults.standard.set("\(p.lat),\(p.long)", forKey: "activeLoc")
+        step += 1
+    }
+}
+
+/// Banner on the map while hopping: progress + stop.
+struct HopBanner: View {
+    @ObservedObject var runner = HopRunner.shared
+    var onStop: () -> Void
+    var body: some View {
+        if runner.isRunning, runner.points.indices.contains(runner.currentIndex) {
+            HStack(spacing: 10) {
+                Image(systemName: runner.random ? "shuffle" : "arrow.right")
+                    .font(.system(size: 15, weight: .semibold)).foregroundColor(.accentColor)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(L("Nhảy cóc: điểm \(runner.currentIndex + 1)/\(runner.points.count)",
+                           "Hopping: point \(runner.currentIndex + 1)/\(runner.points.count)"))
+                        .font(.footnote.weight(.semibold))
+                    Text("\(runner.points[runner.currentIndex].displayName) • \(runner.intervalMs) ms")
+                        .font(.caption).foregroundColor(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Button(action: onStop) {
+                    Image(systemName: "stop.fill").font(.system(size: 14, weight: .bold)).foregroundColor(.white)
+                        .frame(width: 32, height: 32).background(Circle().fill(Color.red))
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial))
+            .shadow(color: .black.opacity(0.15), radius: 5, y: 2)
+        }
+    }
+}
+
+/// Choose the points (from Bookmarks / History / the map pin), the interval in ms and the order.
+struct HopSetupView: View {
+    var pinCoordinate: CLLocationCoordinate2D?   // WGS-84 of the map pin
+    var onStart: ([Bookmark], Int, Bool) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("hopIntervalMs") private var intervalText: String = "1000"
+    @AppStorage("hopRandom") private var random = false
+    @State private var source: LocList = .bookmarks
+    @State private var search = ""
+    @State private var picked: [Bookmark] = HopRunner.shared.points
+    @State private var items: [Bookmark] = []
+
+    private func key(_ b: Bookmark) -> String { String(format: "%.6f,%.6f", b.lat, b.long) }
+    private func order(_ b: Bookmark) -> Int? { picked.firstIndex { key($0) == key(b) } }
+    private var shown: [Bookmark] { filterAndSort(items, search: search, sort: source == .history ? .newest : .az) }
+    private var interval: Int? { Int(intervalText.trimmingCharacters(in: .whitespaces)) }
+    private var canStart: Bool { picked.count >= 2 && (interval ?? 0) >= 100 }
+
+    var body: some View {
+        NavigationView {
+            List {
+                Section {
+                    HStack {
+                        Text(L("Thời gian mỗi lần nhảy", "Time between jumps"))
+                        Spacer()
+                        TextField("1000", text: $intervalText)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 90)
+                        Text("ms").foregroundColor(.secondary)
+                    }
+                    Picker(L("Thứ tự", "Order"), selection: $random) {
+                        Text(L("Theo thứ tự", "In order")).tag(false)
+                        Text(L("Ngẫu nhiên", "Random")).tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                } footer: {
+                    Text(L("1000 ms = 1 giây. Tối thiểu 100 ms. Theo thứ tự: nhảy lần lượt theo số thứ tự đã chọn rồi lặp lại. App cần đang mở thì mới nhảy tiếp.",
+                           "1000 ms = 1 second. Minimum 100 ms. In order: follows the numbers you picked, then loops. The app must stay open to keep hopping."))
+                }
+
+                Section {
+                    if let pin = pinCoordinate {
+                        Button {
+                            let b = Bookmark(name: L("Điểm ghim trên bản đồ", "Map pin"), lat: pin.latitude, long: pin.longitude)
+                            if order(b) == nil { picked.append(b) }
+                        } label: {
+                            Label(L("Thêm điểm ghim hiện tại trên bản đồ", "Add the current map pin"), systemImage: "mappin.and.ellipse")
+                        }
+                    }
+                    ForEach(Array(picked.enumerated()), id: \.offset) { i, b in
+                        HStack {
+                            Text("\(i + 1)").font(.footnote.weight(.bold)).foregroundColor(.white)
+                                .frame(width: 24, height: 24).background(Circle().fill(Color.accentColor))
+                            Text(b.displayName).lineLimit(1)
+                            Spacer()
+                            Text(String(format: "%.5f, %.5f", b.lat, b.long)).font(.caption.monospacedDigit()).foregroundColor(.secondary)
+                        }
+                    }
+                    .onDelete { picked.remove(atOffsets: $0) }
+                } header: {
+                    HStack {
+                        Text(L("Đã chọn \(picked.count) điểm", "\(picked.count) points selected"))
+                        Spacer()
+                        if !picked.isEmpty {
+                            Button(L("Bỏ chọn hết", "Clear")) { picked = [] }.font(.footnote)
+                        }
+                    }
+                }
+
+                Section {
+                    Picker("", selection: $source) {
+                        Text(LocList.bookmarks.title).tag(LocList.bookmarks)
+                        Text(LocList.history.title).tag(LocList.history)
+                    }
+                    .pickerStyle(.segmented)
+                    TextField(L("Tìm…", "Search…"), text: $search).disableAutocorrection(true)
+                    if !shown.isEmpty {
+                        Button(L("Chọn tất cả \(shown.count) điểm đang hiện", "Select all \(shown.count) shown")) {
+                            for b in shown where order(b) == nil { picked.append(b) }
+                        }
+                    }
+                    ForEach(shown) { b in
+                        Button {
+                            if let i = order(b) { picked.remove(at: i) } else { picked.append(b) }
+                        } label: {
+                            HStack {
+                                if let i = order(b) {
+                                    Text("\(i + 1)").font(.footnote.weight(.bold)).foregroundColor(.white)
+                                        .frame(width: 24, height: 24).background(Circle().fill(Color.accentColor))
+                                } else {
+                                    Image(systemName: "circle").font(.system(size: 22)).foregroundColor(Color(.tertiaryLabel))
+                                        .frame(width: 24, height: 24)
+                                }
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(b.displayName).foregroundColor(.primary).lineLimit(1)
+                                    Text(String(format: "%.6f, %.6f", b.lat, b.long)).font(.caption.monospacedDigit()).foregroundColor(.secondary)
+                                }
+                                Spacer()
+                            }
+                        }
+                    }
+                } header: {
+                    Text(L("Chọn điểm (bấm theo thứ tự muốn nhảy)", "Pick points (tap in the order to hop)"))
+                }
+            }
+            .navigationTitle(L("Nhảy cóc", "Hop"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) { Button(L("Huỷ", "Cancel")) { dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(L("Bắt đầu", "Start")) {
+                        hideKeyboard()
+                        onStart(picked, interval ?? 1000, random)
+                        dismiss()
+                    }
+                    .font(.body.weight(.semibold))
+                    .disabled(!canStart)
+                }
+            }
+            .onAppear { items = loadList(source) }
+            .onChange(of: source) { items = loadList($0) }
+        }
     }
 }

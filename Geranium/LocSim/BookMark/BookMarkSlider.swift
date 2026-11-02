@@ -293,7 +293,7 @@ struct LocationListView: View {
     }
 
     private func coordLine(_ item: Bookmark) -> String {
-        L("Kinh độ:\(fmt(item.long))  Vĩ độ:\(fmt(item.lat))", "Longitude:\(fmt(item.long))  Latitude:\(fmt(item.lat))")
+        L("Vĩ độ:\(fmt(item.lat))  Kinh độ:\(fmt(item.long))", "Latitude:\(fmt(item.lat))  Longitude:\(fmt(item.long))")
     }
 
     private func subtitle(_ item: Bookmark, showFolder: Bool) -> String {
