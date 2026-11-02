@@ -28,6 +28,21 @@ class LocSimManager {
         post_required_timezone_update();
     }
     
+    /// Plays a whole list of locations (one every `interval` s) inside iOS itself,
+    /// so it keeps going when the app is in the background or closed.
+    static func playRoute(_ locations: [CLLocation], interval: Double, loop: Bool) {
+        guard !locations.isEmpty else { return }
+        simManager.stopLocationSimulation()
+        simManager.clearSimulatedLocations()
+        simManager.locationDeliveryBehavior = 0
+        simManager.locationRepeatBehavior = loop ? 2 : 0
+        simManager.locationInterval = interval
+        for l in locations { simManager.appendSimulatedLocation(l) }
+        simManager.flush()
+        simManager.startLocationSimulation()
+        post_required_timezone_update();
+    }
+
     /// Stops location simulation
     static func stopLocSim(){
         simManager.stopLocationSimulation()
