@@ -156,7 +156,6 @@ struct LocSimView: View {
             withAnimation(.easeInOut(duration: 0.2)) { isFaking = false }
         }
         .onChange(of: isFaking) { on in
-            if on { FloatWindow.shared.tempOff = false }
             FloatWindow.shared.refresh()
         }
         .onAppear {
@@ -275,10 +274,10 @@ struct LocSimView: View {
                                     .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.systemBackground)))
                                     .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
                             }
-                            Button { FloatWindow.shared.toggleTempOff() } label: {
-                                Image(systemName: floatWin.tempOff ? "pip.remove" : "pip")
+                            Button { FloatWindow.shared.toggleAuto() } label: {
+                                Image(systemName: floatWin.autoOn ? "pip" : "pip.remove")
                                     .font(.system(size: 18, weight: .medium))
-                                    .foregroundColor(floatWin.tempOff ? .red : .accentColor)
+                                    .foregroundColor(floatWin.autoOn ? .accentColor : .secondary)
                                     .frame(width: 44, height: 44)
                                     .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.systemBackground)))
                                     .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
@@ -745,7 +744,6 @@ struct CustomizeAppView: View {
     @AppStorage("appLanguage") private var appLanguage: String = "en"
     @AppStorage("mapType") private var mapType: String = "standard"
     @AppStorage("pipEnabled") private var pipEnabled = false
-    @AppStorage("pipMode") private var pipMode: String = "auto"
     @State private var manualLat = ""
     @State private var manualLong = ""
     @State private var choice = AppIconChoice(rawValue: AppCustomizer.storedChoice) ?? .e
@@ -835,21 +833,13 @@ struct CustomizeAppView: View {
 
                 Section {
                     Toggle(L("Cửa sổ nổi (hình trong hình)", "Floating window (picture in picture)"), isOn: $pipEnabled)
-                    if pipEnabled {
-                        Picker("", selection: $pipMode) {
-                            Text(L("Khi thoát app", "On leaving app")).tag("auto")
-                            Text(L("Khi bấm nút", "With button")).tag("button")
-                        }
-                        .pickerStyle(.segmented)
-                    }
                 } header: {
                     Text(L("Cửa sổ nổi", "Floating window"))
                 } footer: {
-                    Text(L("Khi đang giả lập: ⏯ tạm dừng / chạy tiếp, tua lùi / tua tới = giảm / tăng tốc, ✕ = tắt giả lập. Muốn cất cửa sổ: vuốt nó vào mép màn hình, hoặc bấm nút tắt cửa sổ tạm thời trên bản đồ.",
-                           "While simulating: ⏯ pause / go on, skip back / forward = slower / faster, ✕ = stop simulating. To hide it: swipe it to the screen edge, or use the 'off for now' button on the map."))
+                    Text(L("Bật lên thì trên bản đồ có 2 nút: nút trên = hiện cửa sổ nổi ngay; nút dưới = bật / tắt tự hiện khi thoát app. Trong cửa sổ: ⏯ tạm dừng / chạy tiếp, tua lùi / tua tới = giảm / tăng tốc, ✕ = tắt giả lập.",
+                           "When on, the map gets 2 buttons: top = show the window now; bottom = turn auto-show on leaving the app on / off. In the window: ⏯ pause / go on, skip back / forward = slower / faster, ✕ = stop simulating."))
                 }
                 .onChange(of: pipEnabled) { _ in FloatWindow.shared.refresh() }
-                .onChange(of: pipMode) { _ in FloatWindow.shared.refresh() }
 
                 Section {
                     Picker(L("Kiểu bản đồ", "Map type"), selection: $mapType) {
@@ -3004,8 +2994,8 @@ extension Notification.Name { static let simStoppedFromPiP = Notification.Name("
 /// ⏯ = pause / go on, skip = slower / faster, ✕ = stop simulating.
 final class FloatWindow: NSObject, ObservableObject, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate {
     static let shared = FloatWindow()
-    /// Off until the next simulation starts.
-    @Published var tempOff = false
+    /// Show the window automatically when leaving the app (map button toggles it, remembered).
+    @Published var autoOn: Bool = UserDefaults.standard.object(forKey: "pipAuto") as? Bool ?? true
     private let layer = AVSampleBufferDisplayLayer()
     private var host: UIView?
     private var pip: AVPictureInPictureController?
@@ -3014,7 +3004,6 @@ final class FloatWindow: NSObject, ObservableObject, AVPictureInPictureControlle
     private var closingByApp = false
 
     private var enabled: Bool { UserDefaults.standard.bool(forKey: "pipEnabled") }
-    private var autoMode: Bool { (UserDefaults.standard.string(forKey: "pipMode") ?? "auto") == "auto" }
     private var simulating: Bool { !(UserDefaults.standard.string(forKey: "activeLoc") ?? "").isEmpty }
 
     func prepare() {
@@ -3039,7 +3028,7 @@ final class FloatWindow: NSObject, ObservableObject, AVPictureInPictureControlle
 
     /// Turns the window machinery on/off to match the settings and the simulation.
     func refresh() {
-        let want = enabled && simulating && !tempOff
+        let want = enabled && simulating
         if want {
             try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
             try? AVAudioSession.sharedInstance().setActive(true)
@@ -3053,17 +3042,21 @@ final class FloatWindow: NSObject, ObservableObject, AVPictureInPictureControlle
             frameTimer?.invalidate(); frameTimer = nil
             if pip?.isPictureInPictureActive == true { closingByApp = true; pip?.stopPictureInPicture() }
         }
-        pip?.canStartPictureInPictureAutomaticallyFromInline = want && autoMode
+        pip?.canStartPictureInPictureAutomaticallyFromInline = want && autoOn
     }
 
-    func toggleTempOff() {
-        tempOff.toggle()
+    func toggleAuto() {
+        autoOn.toggle()
+        UserDefaults.standard.set(autoOn, forKey: "pipAuto")
+        if !autoOn, pip?.isPictureInPictureActive == true { closingByApp = true; pip?.stopPictureInPicture() }
         refresh()
+        AlertKitAPI.present(title: autoOn ? L("Tự hiện cửa sổ nổi khi thoát app", "Floating window on leaving the app")
+                                          : L("Tắt tự hiện cửa sổ nổi", "No floating window on leaving the app"),
+                            icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
 
     /// Button mode: show the window now and go to the home screen.
     func showNowAndGoHome() {
-        tempOff = false
         refresh()
         pushFrame()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
