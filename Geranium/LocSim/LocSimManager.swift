@@ -19,13 +19,13 @@ class LocSimManager {
     
     /// Starts a location simulation of specified argument "location"
     // TODO: save
-    static func startLocSim(location: CLLocation) {
+    static func startLocSim(location: CLLocation, updateTimezone: Bool = true) {
         simManager.stopLocationSimulation()
         simManager.clearSimulatedLocations()
         simManager.appendSimulatedLocation(location)
         simManager.flush()
         simManager.startLocationSimulation()
-        post_required_timezone_update();
+        if updateTimezone { post_required_timezone_update() }
     }
     
     /// Plays a whole list of locations (one every `interval` s) inside iOS itself,

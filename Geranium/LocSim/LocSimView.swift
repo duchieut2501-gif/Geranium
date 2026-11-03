@@ -249,9 +249,9 @@ struct LocSimView: View {
                     }
                     .padding(.trailing, 10)
                 }
-                HopBanner(onStop: stop)
+                HopBanner(onStop: { HopRunner.shared.stop() })      // keeps the last hop location
                     .padding(.horizontal, 12)
-                RouteBanner(onStop: stop, onAddPin: addPinToTrip, onAddFromList: { addNextSheet = true })
+                RouteBanner(onStop: { RouteRunner.shared.finishHere() }, onAddPin: addPinToTrip, onAddFromList: { addNextSheet = true })
                     .padding(.horizontal, 12)
                 Spacer()
             }
@@ -1125,7 +1125,7 @@ final class HopRunner: ObservableObject {
         stop()
         guard points.count >= 2 else { return }
         self.points = points
-        self.intervalMs = max(intervalMs, 100)
+        self.intervalMs = max(intervalMs, 1)
         self.random = random
         step = 0
         currentIndex = random ? Int.random(in: 0..<points.count) : 0
@@ -1159,7 +1159,8 @@ final class HopRunner: ObservableObject {
         let p = points[currentIndex]
         let alt = Double(UserDefaults.standard.string(forKey: "locAltitude") ?? "0") ?? 0
         LocSimManager.startLocSim(location: CLLocation(coordinate: p.coordinate, altitude: alt,
-                                                       horizontalAccuracy: 5, verticalAccuracy: 5, timestamp: Date()))
+                                                       horizontalAccuracy: 5, verticalAccuracy: 5, timestamp: Date()),
+                                   updateTimezone: intervalMs >= 100)   // very fast hops: skip the timezone refresh
         UserDefaults.standard.set("\(p.lat),\(p.long)", forKey: "activeLoc")
         step += 1
     }
@@ -1210,7 +1211,7 @@ struct HopSetupView: View {
     private func order(_ b: Bookmark) -> Int? { picked.firstIndex { key($0) == key(b) } }
     private var shown: [Bookmark] { filterAndSort(items, search: search, sort: source == .history ? .newest : .az) }
     private var interval: Int? { Int(intervalText.trimmingCharacters(in: .whitespaces)) }
-    private var canStart: Bool { picked.count >= 2 && (interval ?? 0) >= 100 }
+    private var canStart: Bool { picked.count >= 2 && (interval ?? 0) >= 1 }
 
     var body: some View {
         NavigationView {
@@ -1231,8 +1232,8 @@ struct HopSetupView: View {
                     }
                     .pickerStyle(.segmented)
                 } footer: {
-                    Text(L("1000 ms = 1 giây. Tối thiểu 100 ms. Theo thứ tự: nhảy lần lượt theo số thứ tự đã chọn rồi lặp lại. App cần đang mở thì mới nhảy tiếp.",
-                           "1000 ms = 1 second. Minimum 100 ms. In order: follows the numbers you picked, then loops. The app must stay open to keep hopping."))
+                    Text(L("1000 ms = 1 giây. Tối thiểu 1 ms (dưới 1000 ms các app khác có thể không thấy hết từng điểm). Theo thứ tự: nhảy lần lượt theo số thứ tự đã chọn rồi lặp lại. App cần đang mở thì mới nhảy tiếp.",
+                           "1000 ms = 1 second. Minimum 1 ms (below 1000 ms other apps may not see every point). In order: follows the numbers you picked, then loops. The app must stay open to keep hopping."))
                 }
 
                 Section {
@@ -1337,7 +1338,7 @@ enum RouteEnd: String, CaseIterable, Identifiable {
 final class RouteRunner: ObservableObject {
     static let shared = RouteRunner()
     enum State { case idle, running, paused, waiting, arrived }
-    struct Sample { var c: CLLocationCoordinate2D; var course: Double; var speed: Double; var dist: Double; var wait: Bool; var pathD: Double = 0; var dir: Double = 1 }
+    struct Sample { var c: CLLocationCoordinate2D; var course: Double; var speed: Double; var dist: Double; var wait: Bool; var pathD: Double = 0; var dir: Double = 1; var light = false }
 
     @Published private(set) var state: State = .idle
     @Published private(set) var distance: Double = 0          // metres travelled (whole trip)
@@ -1349,6 +1350,9 @@ final class RouteRunner: ObservableObject {
     @Published private(set) var pathID = UUID()
     @Published var points: [Bookmark] = []                   // last chosen points (kept for next time)
     @Published private(set) var extending = false             // finding the road to an added point
+    @Published private(set) var atLight = false               // waiting at a (simulated) red light
+    /// Simulated red lights: path distance + seconds to wait.
+    private var lights: [(d: Double, sec: Int)] = []
 
     /// true = hand the whole trip to iOS (keeps going even if the app is closed). Settings: "routeSystemPlayback".
     private var systemPlayback: Bool { UserDefaults.standard.object(forKey: "routeSystemPlayback") as? Bool ?? true }
@@ -1432,6 +1436,7 @@ final class RouteRunner: ObservableObject {
         self.vary = vary
         self.stopSeconds = max(stopSeconds, 0)
         self.end = end
+        lights = makeLights(from: 0, to: pathLength)
         let plan = makePlan(from: 0, dir: 1, travelled: 0, first: true)
         samples = plan.0
         loopStart = plan.1
@@ -1477,6 +1482,7 @@ final class RouteRunner: ObservableObject {
                 self.marks.append(oldTotal)
                 self.marks += legMarks.map { $0 + oldTotal }
                 self.legSpeeds += Array(repeating: keepSpeed, count: legMarks.count + 1)
+                self.lights += self.makeLights(from: oldTotal, to: self.pathLength)
                 self.points += newPoints
                 let keep = max(self.lastIndex, 0)
                 let cur = self.samples.indices.contains(keep) ? self.samples[keep] : self.samples.last
@@ -1544,6 +1550,12 @@ final class RouteRunner: ObservableObject {
         }
     }
 
+    /// Ends the trip but keeps the location where the car is now (until the user stops simulating).
+    func finishHere() {
+        if let s = current { send(s, speed: 0) }
+        stop()
+    }
+
     /// Ends the trip and removes the line. The caller sets / stops the location afterwards.
     func stop() {
         timer?.invalidate(); timer = nil
@@ -1582,10 +1594,11 @@ final class RouteRunner: ObservableObject {
         let s = samples[i]
         distance = s.dist
         currentSpeedKmh = s.speed * 3.6
+        atLight = s.light
         if s.wait {
             var n = 0
             var j = i
-            while j < samples.count, samples[j].wait { n += 1; j += 1 }
+            while j < samples.count, samples[j].wait, samples[j].light == s.light { n += 1; j += 1 }
             waitLeft = n
             state = .waiting
         } else {
@@ -1657,33 +1670,62 @@ final class RouteRunner: ObservableObject {
             if dir < 0 { course = (course + 180).truncatingRemainder(dividingBy: 360) }
             return (c, course)
         }
+        // Settings (remembered between uses)
+        let ud = UserDefaults.standard
+        let walking = ud.bool(forKey: "routeWalking")
+        let varyKmh = max(Double((ud.string(forKey: "routeVaryKmh") ?? "5").replacingOccurrences(of: ",", with: ".")) ?? 5, 0)
+        let turnSlow = ud.object(forKey: "routeTurnSlow") as? Bool ?? true
+        let turnKmh = max(Double((ud.string(forKey: "routeTurnSpeed") ?? "15").replacingOccurrences(of: ",", with: ".")) ?? 15, 1)
+        let accel = walking ? 0.6 : 1.5                            // m/s² for slowing down / speeding up
+        let turns = turnSlow ? Self.turns(path: path, cum: cum) : []
+        let lightList = lights
+        /// Highest speed (m/s) allowed at d: slow into turns and red lights, speed up after.
+        func cap(_ d: Double) -> Double {
+            var c = Double.infinity
+            for t in turns where abs(t.d - d) < 300 {
+                let f = t.angle >= 120 ? 0.7 : (t.angle >= 60 ? 1.0 : 1.6)
+                let vT = turnKmh * f / 3.6
+                c = min(c, (vT * vT + 2 * accel * abs(d - t.d)).squareRoot())
+            }
+            for l in lightList where abs(l.d - d) < 400 {
+                c = min(c, (2 * accel * abs(d - l.d)).squareRoot())
+            }
+            return c
+        }
+        var offset: Double = 0
         var out: [Sample] = []
         var travelled = t0
-        var factor: Double = 1
         var lastD = start
         func wait() {
             guard stopSeconds > 0, let l = out.last else { return }
             for _ in 0..<stopSeconds { out.append(Sample(c: l.c, course: l.course, speed: 0, dist: travelled, wait: true, pathD: lastD, dir: l.dir)) }
         }
+        func lightWait(_ sec: Int) {
+            guard sec > 0, let l = out.last else { return }
+            for _ in 0..<sec { out.append(Sample(c: l.c, course: l.course, speed: 0, dist: travelled, wait: true, pathD: lastD, dir: l.dir, light: true)) }
+        }
         func leg(from: Double, to: Double) {
             let dir: Double = to >= from ? 1 : -1
-            let ms = (dir > 0 ? stopMarks.sorted() : stopMarks.sorted(by: >))
-                .filter { dir > 0 ? ($0 > from + 0.5 && $0 < to - 0.5) : ($0 < from - 0.5 && $0 > to + 0.5) }
+            let inRange: (Double) -> Bool = { dir > 0 ? ($0 > from + 0.5 && $0 < to - 0.5) : ($0 < from - 0.5 && $0 > to + 0.5) }
+            // stops (sec = -1) and red lights (sec = wait), in travel order
+            var events: [(d: Double, sec: Int)] = stopMarks.filter(inRange).map { (d: $0, sec: -1) } + lightList.filter { inRange($0.d) }
+            events.sort { dir > 0 ? $0.d < $1.d : $0.d > $1.d }
             var d = from
             var next = 0
             while dir > 0 ? d < to : d > to {
-                if vary { factor = min(max(factor + Double.random(in: -0.08...0.08), 0.8), 1.2) } else { factor = 1 }
-                let v = legSpeed(d, dir) * factor / 3.6
+                if vary { offset = min(max(offset + Double.random(in: -0.3...0.3) * varyKmh, -varyKmh), varyKmh) } else { offset = 0 }
+                var v = max(legSpeed(d, dir) + offset, 1) / 3.6
+                v = max(min(v, cap(d)), 0.5)
                 var nd = d + dir * v
-                var atStop = false
-                if next < ms.count, dir > 0 ? nd >= ms[next] : nd <= ms[next] { nd = ms[next]; next += 1; atStop = true }
+                var hit: Int? = nil
+                if next < events.count, dir > 0 ? nd >= events[next].d : nd <= events[next].d { nd = events[next].d; hit = events[next].sec; next += 1 }
                 if dir > 0 ? nd >= to : nd <= to { nd = to }
                 travelled += abs(nd - d)
                 d = nd
                 lastD = d
                 let (c, k) = pos(d, dir)
                 out.append(Sample(c: c, course: k, speed: v, dist: travelled, wait: false, pathD: d, dir: dir))
-                if atStop { wait() }
+                if let h = hit { if h < 0 { wait() } else { lightWait(h) } }
                 if out.count > 200_000 { return }
             }
         }
@@ -1710,6 +1752,62 @@ final class RouteRunner: ObservableObject {
             wait(); leg(from: total, to: 0); wait(); leg(from: 0, to: total)
             return (out, out.count > ls ? ls : nil)
         }
+    }
+
+    /// Places where the road turns: path distance + how sharp (degrees).
+    static func turns(path: [CLLocationCoordinate2D], cum: [Double]) -> [(d: Double, angle: Double)] {
+        guard path.count >= 3 else { return [] }
+        func point(at d: Double) -> CLLocationCoordinate2D {
+            var i = cum.firstIndex { $0 >= d } ?? cum.count - 1
+            i = max(i, 1)
+            let a = path[i - 1], b = path[i]
+            let seg = cum[i] - cum[i - 1]
+            let t = seg > 0 ? (d - cum[i - 1]) / seg : 0
+            return CLLocationCoordinate2D(latitude: a.latitude + (b.latitude - a.latitude) * t, longitude: a.longitude + (b.longitude - a.longitude) * t)
+        }
+        let total = cum.last ?? 0
+        var out: [(d: Double, angle: Double)] = []
+        for i in 1..<(path.count - 1) {
+            let d = cum[i]
+            guard d > 25, d < total - 25 else { continue }
+            let before = bearing(point(at: d - 25), path[i]), after = bearing(path[i], point(at: d + 25))
+            var diff = abs(after - before).truncatingRemainder(dividingBy: 360)
+            if diff > 180 { diff = 360 - diff }
+            guard diff >= 30 else { continue }
+            if let last = out.last, d - last.d < 40 {                 // same corner: keep the sharpest
+                if diff > last.angle { out[out.count - 1] = (d, diff) }
+            } else {
+                out.append((d, diff))
+            }
+        }
+        return out
+    }
+
+    /// Red lights between a and b (path distance), using the remembered settings.
+    private func makeLights(from a: Double, to b: Double) -> [(d: Double, sec: Int)] {
+        let ud = UserDefaults.standard
+        guard ud.bool(forKey: "routeLights"), b > a else { return [] }
+        var cum: [Double] = [0]
+        for i in 1..<path.count {
+            cum.append(cum[i - 1] + CLLocation(latitude: path[i - 1].latitude, longitude: path[i - 1].longitude)
+                .distance(from: CLLocation(latitude: path[i].latitude, longitude: path[i].longitude)))
+        }
+        let freq = ud.object(forKey: "routeLightFreq") as? Int ?? 1          // 0 few, 1 some, 2 many
+        let pTurn = [0.25, 0.45, 0.65][min(max(freq, 0), 2)]
+        let gap = [1500.0, 900.0, 600.0][min(max(freq, 0), 2)]
+        var lo = Int(ud.string(forKey: "routeLightMin") ?? "15") ?? 15
+        var hi = Int(ud.string(forKey: "routeLightMax") ?? "60") ?? 60
+        lo = max(lo, 1); hi = max(hi, lo)
+        var out: [(d: Double, sec: Int)] = []
+        for t in Self.turns(path: path, cum: cum) where t.d > a + 50 && t.d < b - 50 && Double.random(in: 0..<1) < pTurn {
+            out.append((t.d - 8, Int.random(in: lo...hi)))              // stop just before the corner
+        }
+        var d = a + gap * Double.random(in: 0.7...1.3)
+        while d < b - 100 {
+            if !out.contains(where: { abs($0.d - d) < 200 }) { out.append((d, Int.random(in: lo...hi))) }
+            d += gap * Double.random(in: 0.7...1.3)
+        }
+        return out.sorted { $0.d < $1.d }
     }
 
     private static func bearing(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
@@ -1822,6 +1920,7 @@ struct RouteBanner: View {
     private var title: String {
         switch runner.state {
         case .paused: return L("Đã tạm dừng", "Paused")
+        case .waiting where runner.atLight: return L("Đang dừng đèn đỏ (\(runner.waitLeft) giây)", "Red light (\(runner.waitLeft) s)")
         case .waiting: return L("Đang dừng ở điểm dừng (\(runner.waitLeft) giây)", "Waiting at a stop (\(runner.waitLeft) s)")
         case .arrived: return L("Đã đến nơi", "Arrived")
         default: return L("Đang di chuyển • \(Int(runner.currentSpeedKmh.rounded())) km/h", "Moving • \(Int(runner.currentSpeedKmh.rounded())) km/h")
@@ -1933,6 +2032,13 @@ struct RouteSetupView: View {
     @AppStorage("routeStopSec") private var stopSecText: String = "0"
     @AppStorage("routeEnd") private var endRaw: String = RouteEnd.stop.rawValue
     @AppStorage("routeSystemPlayback") private var systemPlayback = true
+    @AppStorage("routeVaryKmh") private var varyKmh: String = "5"
+    @AppStorage("routeTurnSlow") private var turnSlow = true
+    @AppStorage("routeTurnSpeed") private var turnSpeed: String = "15"
+    @AppStorage("routeLights") private var lights = false
+    @AppStorage("routeLightFreq") private var lightFreq = 1
+    @AppStorage("routeLightMin") private var lightMin: String = "15"
+    @AppStorage("routeLightMax") private var lightMax: String = "60"
     @State private var picked: [Bookmark] = RouteRunner.shared.points
     @State private var busy: String? = nil
     @State private var segSpeeds: [String: Double] = [:]          // custom speed per leg (key = from>to)
@@ -1999,6 +2105,45 @@ struct RouteSetupView: View {
                         Text("km/h").foregroundColor(.secondary)
                     }
                     Toggle(L("Tốc độ dao động cho giống thật", "Vary the speed a little"), isOn: $vary)
+                    if vary {
+                        HStack {
+                            Text(L("Dao động", "Vary by"))
+                            Spacer()
+                            Text("±").foregroundColor(.secondary)
+                            TextField("5", text: $varyKmh)
+                                .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 60)
+                            Text("km/h").foregroundColor(.secondary)
+                        }
+                    }
+                    Toggle(L("Giảm tốc khi rẽ", "Slow down at turns"), isOn: $turnSlow)
+                    if turnSlow {
+                        HStack {
+                            Text(L("Tốc độ khi rẽ", "Turn speed"))
+                            Spacer()
+                            TextField("15", text: $turnSpeed)
+                                .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 60)
+                            Text("km/h").foregroundColor(.secondary)
+                        }
+                    }
+                    Toggle(L("Dừng đèn đỏ", "Stop at red lights"), isOn: $lights)
+                    if lights {
+                        Picker(L("Tần suất", "How often"), selection: $lightFreq) {
+                            Text(L("Ít", "Few")).tag(0)
+                            Text(L("Vừa", "Some")).tag(1)
+                            Text(L("Nhiều", "Many")).tag(2)
+                        }
+                        .pickerStyle(.segmented)
+                        HStack {
+                            Text(L("Chờ đèn", "Wait"))
+                            Spacer()
+                            TextField("15", text: $lightMin)
+                                .keyboardType(.numberPad).multilineTextAlignment(.trailing).frame(width: 44)
+                            Text("–").foregroundColor(.secondary)
+                            TextField("60", text: $lightMax)
+                                .keyboardType(.numberPad).multilineTextAlignment(.trailing).frame(width: 44)
+                            Text(L("giây", "s")).foregroundColor(.secondary)
+                        }
+                    }
                     HStack {
                         Text(L("Dừng ở mỗi điểm dừng", "Wait at each stop"))
                         Spacer()
