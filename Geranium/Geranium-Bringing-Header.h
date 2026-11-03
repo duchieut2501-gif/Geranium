@@ -7,3 +7,4 @@
 
 #import "LocSim/LocSimPrivateHeaders.h"
 #import "TSUtil.h"
+#import "LocSim/BubbleHUD.h"

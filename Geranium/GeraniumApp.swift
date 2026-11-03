@@ -6,7 +6,16 @@
 //
 
 import SwiftUI
+
+/// Entry point: the same file also runs the floating bubble process ("-bubble-hud").
 @main
+enum AppLauncher {
+    static func main() {
+        _ = BubbleHandleLaunchArguments(CommandLine.argc, CommandLine.unsafeArgv)
+        GeraniumApp.main()
+    }
+}
+
 struct GeraniumApp: App {
     // Location-simulation only build: no welcome screen, update check, cleaner, daemons, etc.
     var body: some Scene {

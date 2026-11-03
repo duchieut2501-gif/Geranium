@@ -30,6 +30,7 @@
 		7989FD082B34894400FBAB8D /* BookMarkSlider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7989FD072B34894400FBAB8D /* BookMarkSlider.swift */; };
 		7989FD0A2B348A0200FBAB8D /* BookMarkHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7989FD092B348A0200FBAB8D /* BookMarkHelper.swift */; };
 		799488A62B347E2C00AFFDCF /* LocSimManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 799488A52B347E2C00AFFDCF /* LocSimManager.swift */; };
+		B0B1B2B3B4B5B6B7B8B9BA01 /* BubbleHUD.mm in Sources */ = {isa = PBXBuildFile; fileRef = B0B1B2B3B4B5B6B7B8B9BA02 /* BubbleHUD.mm */; };
 		799D42462B553AF1001867E0 /* CustomPaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 799D42452B553AF1001867E0 /* CustomPaths.swift */; };
 		79AEFBBD2B2CBC6B0074EC34 /* ProgressBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79AEFBBC2B2CBC6B0074EC34 /* ProgressBar.swift */; };
 		79BA958A2B30D91600380D83 /* RootHelperMan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79BA95892B30D91600380D83 /* RootHelperMan.swift */; };
@@ -120,6 +121,8 @@
 		7989FD052B3486B100FBAB8D /* CustomMapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomMapView.swift; sourceTree = "<group>"; };
 		7989FD072B34894400FBAB8D /* BookMarkSlider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookMarkSlider.swift; sourceTree = "<group>"; };
 		7989FD092B348A0200FBAB8D /* BookMarkHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookMarkHelper.swift; sourceTree = "<group>"; };
+		B0B1B2B3B4B5B6B7B8B9BA02 /* BubbleHUD.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = BubbleHUD.mm; sourceTree = "<group>"; };
+		B0B1B2B3B4B5B6B7B8B9BA03 /* BubbleHUD.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = BubbleHUD.h; sourceTree = "<group>"; };
 		799488A52B347E2C00AFFDCF /* LocSimManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LocSimManager.swift; sourceTree = "<group>"; };
 		799488A72B347E2F00AFFDCF /* LocSimPrivateHeaders.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LocSimPrivateHeaders.h; sourceTree = "<group>"; };
 		799D42452B553AF1001867E0 /* CustomPaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomPaths.swift; sourceTree = "<group>"; };
@@ -238,6 +241,8 @@
 				7989FD052B3486B100FBAB8D /* CustomMapView.swift */,
 				799488A52B347E2C00AFFDCF /* LocSimManager.swift */,
 				799488A72B347E2F00AFFDCF /* LocSimPrivateHeaders.h */,
+				B0B1B2B3B4B5B6B7B8B9BA02 /* BubbleHUD.mm */,
+				B0B1B2B3B4B5B6B7B8B9BA03 /* BubbleHUD.h */,
 				7989FD022B347EEA00FBAB8D /* LocSimView.swift */,
 			);
 			path = LocSim;
@@ -593,6 +598,7 @@
 				FAA457322B2667CB00FC7287 /* SuperviseView.swift in Sources */,
 				792845532B2C67910021E1FD /* FileCleaner.swift in Sources */,
 				799488A62B347E2C00AFFDCF /* LocSimManager.swift in Sources */,
+				B0B1B2B3B4B5B6B7B8B9BA01 /* BubbleHUD.mm in Sources */,
 				79C28EF72B3F5C7100050A42 /* ByeTimeView.swift in Sources */,
 				FAA456D72B265FEA00FC7287 /* ContentView.swift in Sources */,
 				7918209A2B31F109007EEC24 /* LogHelper.swift in Sources */,
@@ -865,6 +871,8 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Geranium/Geranium-Bringing-Header.h";
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/Geranium/LocSim/BubbleHeaders";
+				OTHER_LDFLAGS = "$(SRCROOT)/Geranium/LocSim/BubbleLibs/GraphicsServices.tbd $(SRCROOT)/Geranium/LocSim/BubbleLibs/BackBoardServices.tbd $(SRCROOT)/Geranium/LocSim/BubbleLibs/SpringBoardServices.tbd";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -905,6 +913,8 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Geranium/Geranium-Bringing-Header.h";
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/Geranium/LocSim/BubbleHeaders";
+				OTHER_LDFLAGS = "$(SRCROOT)/Geranium/LocSim/BubbleLibs/GraphicsServices.tbd $(SRCROOT)/Geranium/LocSim/BubbleLibs/BackBoardServices.tbd $(SRCROOT)/Geranium/LocSim/BubbleLibs/SpringBoardServices.tbd";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

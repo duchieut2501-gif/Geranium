@@ -157,9 +157,11 @@ struct LocSimView: View {
         }
         .onChange(of: isFaking) { on in
             FloatWindow.shared.refresh()
+            Bubble.shared.push()
         }
         .onAppear {
             FloatWindow.shared.prepare()
+            Bubble.shared.prepare()
             LocationModel().requestAuthorisation()
             CLLocationManager().requestAlwaysAuthorization()
             AppCustomizer.restoreIconIfNeeded()
@@ -744,6 +746,7 @@ struct CustomizeAppView: View {
     @AppStorage("appLanguage") private var appLanguage: String = "en"
     @AppStorage("mapType") private var mapType: String = "standard"
     @AppStorage("pipEnabled") private var pipEnabled = false
+    @AppStorage("bubbleEnabled") private var bubbleEnabled = false
     @State private var manualLat = ""
     @State private var manualLong = ""
     @State private var choice = AppIconChoice(rawValue: AppCustomizer.storedChoice) ?? .e
@@ -832,12 +835,14 @@ struct CustomizeAppView: View {
                 }
 
                 Section {
+                    Toggle(L("Bong bóng (nút nổi trên mọi app)", "Bubble (floating button over apps)"), isOn: $bubbleEnabled)
+                        .onChange(of: bubbleEnabled) { _ in Bubble.shared.refresh() }
                     Toggle(L("Cửa sổ nổi (hình trong hình)", "Floating window (picture in picture)"), isOn: $pipEnabled)
                 } header: {
                     Text(L("Cửa sổ nổi", "Floating window"))
                 } footer: {
-                    Text(L("Bật lên thì trên bản đồ có 2 nút: nút trên = hiện cửa sổ nổi ngay; nút dưới = bật / tắt tự hiện khi thoát app. Trong cửa sổ: ⏯ tạm dừng / chạy tiếp, tua lùi / tua tới = giảm / tăng tốc, ✕ = tắt giả lập.",
-                           "When on, the map gets 2 buttons: top = show the window now; bottom = turn auto-show on leaving the app on / off. In the window: ⏯ pause / go on, skip back / forward = slower / faster, ✕ = stop simulating."))
+                    Text(L("Bong bóng: nút tròn nổi trên mọi app khi đang giả lập, kéo đi đâu cũng được; chạm vào để mở các nút Tắt giả lập, ⏯, – / + tốc độ. Hình trong hình: bật lên thì trên bản đồ có 2 nút: nút trên = hiện cửa sổ nổi ngay; nút dưới = bật / tắt tự hiện khi thoát app. Trong cửa sổ: ⏯ tạm dừng / chạy tiếp, tua lùi / tua tới = giảm / tăng tốc, ✕ = tắt giả lập.",
+                           "Bubble: a round button over every app while simulating, drag it anywhere; tap it for Stop, ⏯, – / + speed. Picture in picture: when on, the map gets 2 buttons: top = show the window now; bottom = turn auto-show on leaving the app on / off. In the window: ⏯ pause / go on, skip back / forward = slower / faster, ✕ = stop simulating."))
                 }
                 .onChange(of: pipEnabled) { _ in FloatWindow.shared.refresh() }
 
@@ -3069,7 +3074,7 @@ final class FloatWindow: NSObject, ObservableObject, AVPictureInPictureControlle
 
     // MARK: frames
 
-    private var statusLines: (String, String) {
+    var statusLines: (String, String) {
         let r = RouteRunner.shared, h = HopRunner.shared
         if r.isActive {
             let t: String
@@ -3167,12 +3172,80 @@ final class FloatWindow: NSObject, ObservableObject, AVPictureInPictureControlle
     func pictureInPictureControllerDidStopPictureInPicture(_ c: AVPictureInPictureController) {
         defer { restoring = false; closingByApp = false }
         guard !restoring, !closingByApp else { return }
-        // ✕ = stop simulating
+        Self.stopEverything()                                // ✕ = stop simulating
+    }
+
+    /// Stop simulating completely (from the floating window or the bubble).
+    static func stopEverything() {
         HopRunner.shared.stop()
         RouteRunner.shared.stop()
         LocSimManager.stopLocSim()
         UserDefaults.standard.set("", forKey: "activeLoc")
         NotificationCenter.default.post(name: .simStoppedFromPiP, object: nil)
+        shared.refresh()
+        Bubble.shared.refresh()
+    }
+}
+
+// MARK: - Bubble (floating button over every app, separate process)
+
+final class Bubble {
+    static let shared = Bubble()
+    private var timer: Timer?
+    private var last = ""
+    private var prepared = false
+    private var enabled: Bool { UserDefaults.standard.bool(forKey: "bubbleEnabled") }
+
+    func prepare() {
+        guard !prepared else { return }
+        prepared = true
+        BubbleOnCommand { cmd in
+            switch cmd {
+            case 1: FloatWindow.stopEverything()
+            case 2:
+                if RouteRunner.shared.isActive { RouteRunner.shared.togglePause() }
+                else if HopRunner.shared.isRunning { HopRunner.shared.togglePause() }
+            case 3, 4:
+                let step: Double = UserDefaults.standard.bool(forKey: "routeWalking") ? 1 : 5
+                RouteRunner.shared.changeSpeed(by: cmd == 3 ? -step : step)
+            default: break
+            }
+            Bubble.shared.push()
+        }
         refresh()
+    }
+
+    func refresh() {
+        if enabled {
+            if !BubbleIsRunning() { BubbleSetEnabled(true) }
+            if timer == nil {
+                let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.push() }
+                RunLoop.main.add(t, forMode: .common)
+                timer = t
+            }
+            last = ""
+            push()
+        } else {
+            timer?.invalidate(); timer = nil
+            if BubbleIsRunning() { BubbleSetEnabled(false) }
+        }
+    }
+
+    /// Sends what the bubble should show (only when it changed).
+    func push() {
+        guard enabled else { return }
+        let simulating = !(UserDefaults.standard.string(forKey: "activeLoc") ?? "").isEmpty
+        let r = RouteRunner.shared, h = HopRunner.shared
+        let (a, b) = FloatWindow.shared.statusLines
+        let dict: [String: Any] = [
+            "show": simulating, "title": a, "sub": b,
+            "paused": r.state == .paused || h.paused,
+            "canPause": (r.isActive && r.state != .arrived) || h.isRunning,
+            "canSpeed": r.isActive && r.state != .arrived,
+        ]
+        guard let d = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
+              let json = String(data: d, encoding: .utf8), json != last else { return }
+        last = json
+        BubbleWriteStatus(json)
     }
 }
