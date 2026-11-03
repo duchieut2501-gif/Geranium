@@ -12,6 +12,8 @@ import AlertKit
 import PhotosUI
 import UIKit
 import MapKit
+import AVKit
+import AVFoundation
 
 /// Play triangle whose visual centre (centroid) sits exactly in the middle of its frame.
 struct PlayTriangle: Shape {
@@ -81,6 +83,8 @@ struct LocSimView: View {
     @State private var hopSheet = false
     @State private var routeSheet = false
     @State private var addNextSheet = false
+    @AppStorage("pipEnabled") private var pipEnabled = false
+    @ObservedObject private var floatWin = FloatWindow.shared
     @ObservedObject private var route = RouteRunner.shared
     @AppStorage("textSize") private var textSize: String = TextSizeOption.small.rawValue
     /// "lat,long" of the place being simulated ("" = none). Lists use it to mark that row red.
@@ -148,7 +152,15 @@ struct LocSimView: View {
         .onChange(of: tab) { newTab in
             if newTab == .places { placesTab = .bookmarks }   // always open on Bookmarks
         }
+        .onReceive(NotificationCenter.default.publisher(for: .simStoppedFromPiP)) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) { isFaking = false }
+        }
+        .onChange(of: isFaking) { on in
+            if on { FloatWindow.shared.tempOff = false }
+            FloatWindow.shared.refresh()
+        }
         .onAppear {
+            FloatWindow.shared.prepare()
             LocationModel().requestAuthorisation()
             CLLocationManager().requestAlwaysAuthorization()
             AppCustomizer.restoreIconIfNeeded()
@@ -250,6 +262,30 @@ struct LocSimView: View {
                             .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
                     }
                     .padding(.trailing, 10)
+                }
+                // Floating window (picture in picture): show now / keep it off for now
+                if pipEnabled && isFaking {
+                    HStack {
+                        Spacer()
+                        VStack(spacing: 8) {
+                            Button { FloatWindow.shared.showNowAndGoHome() } label: {
+                                Image(systemName: "pip.enter")
+                                    .font(.system(size: 18, weight: .medium)).foregroundColor(.accentColor)
+                                    .frame(width: 44, height: 44)
+                                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.systemBackground)))
+                                    .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+                            }
+                            Button { FloatWindow.shared.toggleTempOff() } label: {
+                                Image(systemName: floatWin.tempOff ? "pip.remove" : "pip")
+                                    .font(.system(size: 18, weight: .medium))
+                                    .foregroundColor(floatWin.tempOff ? .red : .accentColor)
+                                    .frame(width: 44, height: 44)
+                                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.systemBackground)))
+                                    .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+                            }
+                        }
+                        .padding(.trailing, 10)
+                    }
                 }
                 HopBanner(onStop: { HopRunner.shared.stop() })      // keeps the last hop location
                     .padding(.horizontal, 12)
@@ -704,6 +740,8 @@ struct CustomizeAppView: View {
     @AppStorage("textSize") private var textSize: String = TextSizeOption.small.rawValue
     @AppStorage("appLanguage") private var appLanguage: String = "en"
     @AppStorage("mapType") private var mapType: String = "standard"
+    @AppStorage("pipEnabled") private var pipEnabled = false
+    @AppStorage("pipMode") private var pipMode: String = "auto"
     @State private var manualLat = ""
     @State private var manualLong = ""
     @State private var choice = AppIconChoice(rawValue: AppCustomizer.storedChoice) ?? .e
@@ -790,6 +828,24 @@ struct CustomizeAppView: View {
                 } header: {
                     Text(L("Ngôn ngữ / Language", "Language / Ngôn ngữ"))
                 }
+
+                Section {
+                    Toggle(L("Cửa sổ nổi (hình trong hình)", "Floating window (picture in picture)"), isOn: $pipEnabled)
+                    if pipEnabled {
+                        Picker(L("Khi nào hiện", "When to show"), selection: $pipMode) {
+                            Text(L("Tự hiện khi thoát app", "When leaving the app")).tag("auto")
+                            Text(L("Chỉ khi bấm nút", "Only with the button")).tag("button")
+                        }
+                        .pickerStyle(.inline)
+                    }
+                } header: {
+                    Text(L("Cửa sổ nổi", "Floating window"))
+                } footer: {
+                    Text(L("Khi đang giả lập: ⏯ tạm dừng / chạy tiếp, tua lùi / tua tới = giảm / tăng tốc, ✕ = tắt giả lập. Muốn cất cửa sổ: vuốt nó vào mép màn hình, hoặc bấm nút tắt cửa sổ tạm thời trên bản đồ.",
+                           "While simulating: ⏯ pause / go on, skip back / forward = slower / faster, ✕ = stop simulating. To hide it: swipe it to the screen edge, or use the 'off for now' button on the map."))
+                }
+                .onChange(of: pipEnabled) { _ in FloatWindow.shared.refresh() }
+                .onChange(of: pipMode) { _ in FloatWindow.shared.refresh() }
 
                 Section {
                     Picker(L("Kiểu bản đồ", "Map type"), selection: $mapType) {
@@ -1136,14 +1192,29 @@ final class HopRunner: ObservableObject {
         isRunning = true
         jump()
         BackgroundKeeper.shared.update()
-        let t = Timer(timeInterval: Double(self.intervalMs) / 1000, repeats: true) { [weak self] _ in self?.next() }
+        paused = false
+        startTimer()
+    }
+
+    @Published private(set) var paused = false
+
+    private func startTimer() {
+        timer?.invalidate()
+        let t = Timer(timeInterval: Double(intervalMs) / 1000, repeats: true) { [weak self] _ in self?.next() }
         RunLoop.main.add(t, forMode: .common)
         timer = t
+    }
+
+    /// Pause / go on (from the floating window).
+    func togglePause() {
+        guard isRunning else { return }
+        if paused { paused = false; startTimer() } else { paused = true; timer?.invalidate(); timer = nil }
     }
 
     func stop() {
         timer?.invalidate()
         timer = nil
+        paused = false
         if isRunning { isRunning = false; BackgroundKeeper.shared.update() }
     }
 
@@ -2915,5 +2986,193 @@ struct RouteChooserView: View {
                 leg = askLegs.first ?? 0
             }
         }
+    }
+}
+
+// MARK: - Floating window (picture in picture)
+
+extension Notification.Name { static let simStoppedFromPiP = Notification.Name("simStoppedFromPiP") }
+
+/// Shows the trip / hop status in a picture-in-picture window over other apps.
+/// ⏯ = pause / go on, skip = slower / faster, ✕ = stop simulating.
+final class FloatWindow: NSObject, ObservableObject, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate {
+    static let shared = FloatWindow()
+    /// Off until the next simulation starts.
+    @Published var tempOff = false
+    private let layer = AVSampleBufferDisplayLayer()
+    private var host: UIView?
+    private var pip: AVPictureInPictureController?
+    private var frameTimer: Timer?
+    private var restoring = false
+    private var closingByApp = false
+
+    private var enabled: Bool { UserDefaults.standard.bool(forKey: "pipEnabled") }
+    private var autoMode: Bool { (UserDefaults.standard.string(forKey: "pipMode") ?? "auto") == "auto" }
+    private var simulating: Bool { !(UserDefaults.standard.string(forKey: "activeLoc") ?? "").isEmpty }
+
+    func prepare() {
+        guard host == nil, AVPictureInPictureController.isPictureInPictureSupported() else { return }
+        guard let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.windows.first }).first else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.prepare() }
+            return
+        }
+        let v = UIView(frame: CGRect(x: 0, y: 0, width: 4, height: 4))
+        v.isUserInteractionEnabled = false
+        layer.frame = v.bounds
+        layer.videoGravity = .resizeAspect
+        v.layer.addSublayer(layer)
+        window.insertSubview(v, at: 0)
+        host = v
+        let c = AVPictureInPictureController(contentSource: .init(sampleBufferDisplayLayer: layer, playbackDelegate: self))
+        c.delegate = self
+        c.requiresLinearPlayback = false
+        pip = c
+        refresh()
+    }
+
+    /// Turns the window machinery on/off to match the settings and the simulation.
+    func refresh() {
+        let want = enabled && simulating && !tempOff
+        if want {
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
+            try? AVAudioSession.sharedInstance().setActive(true)
+            if frameTimer == nil {
+                let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.pushFrame() }
+                RunLoop.main.add(t, forMode: .common)
+                frameTimer = t
+                pushFrame()
+            }
+        } else {
+            frameTimer?.invalidate(); frameTimer = nil
+            if pip?.isPictureInPictureActive == true { closingByApp = true; pip?.stopPictureInPicture() }
+        }
+        pip?.canStartPictureInPictureAutomaticallyFromInline = want && autoMode
+    }
+
+    func toggleTempOff() {
+        tempOff.toggle()
+        refresh()
+    }
+
+    /// Button mode: show the window now and go to the home screen.
+    func showNowAndGoHome() {
+        tempOff = false
+        refresh()
+        pushFrame()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            self.pip?.startPictureInPicture()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                UIControl().sendAction(#selector(URLSessionTask.suspend), to: UIApplication.shared, for: nil)   // back to home screen
+            }
+        }
+    }
+
+    // MARK: frames
+
+    private var statusLines: (String, String) {
+        let r = RouteRunner.shared, h = HopRunner.shared
+        if r.isActive {
+            let t: String
+            switch r.state {
+            case .paused: t = L("Lộ trình: tạm dừng", "Trip: paused")
+            case .arrived: t = L("Lộ trình: đã đến nơi", "Trip: arrived")
+            case .waiting: t = r.atLight ? L("Đang dừng đèn đỏ", "Red light") : L("Đang dừng ở điểm dừng", "Waiting at a stop")
+            default: t = L("Đang chạy • \(Int(r.currentSpeedKmh.rounded())) km/h", "Moving • \(Int(r.currentSpeedKmh.rounded())) km/h")
+            }
+            return (t, String(format: "%.2f / %.2f km  •  %@ %d km/h", r.distance / 1000, r.total / 1000, L("đặt", "set"), Int(r.currentLegSpeed.rounded())))
+        }
+        if h.isRunning {
+            return (h.paused ? L("Nhảy cóc: tạm dừng", "Hopping: paused") : L("Đang nhảy cóc", "Hopping"),
+                    L("Điểm \(h.currentIndex + 1)/\(h.points.count) • \(h.intervalMs) ms", "Point \(h.currentIndex + 1)/\(h.points.count) • \(h.intervalMs) ms"))
+        }
+        let loc = UserDefaults.standard.string(forKey: "activeLoc") ?? ""
+        let p = loc.split(separator: ",").compactMap { Double($0) }
+        return (L("Đang giả lập vị trí", "Simulating location"), p.count == 2 ? String(format: "%.6f, %.6f", p[0], p[1]) : "")
+    }
+
+    private func pushFrame() {
+        let (a, b) = statusLines
+        let size = CGSize(width: 640, height: 240)
+        let img = UIGraphicsImageRenderer(size: size).image { ctx in
+            UIColor(white: 0.07, alpha: 1).setFill(); ctx.fill(CGRect(origin: .zero, size: size))
+            UIColor.systemRed.setFill()
+            UIBezierPath(ovalIn: CGRect(x: 32, y: 52, width: 26, height: 26)).fill()
+            (a as NSString).draw(at: CGPoint(x: 76, y: 40), withAttributes: [.font: UIFont.systemFont(ofSize: 40, weight: .bold), .foregroundColor: UIColor.white])
+            (b as NSString).draw(at: CGPoint(x: 32, y: 130), withAttributes: [.font: UIFont.monospacedDigitSystemFont(ofSize: 34, weight: .medium), .foregroundColor: UIColor(white: 0.8, alpha: 1)])
+        }
+        guard let cg = img.cgImage, let sb = Self.sampleBuffer(cg) else { return }
+        if layer.status == .failed { layer.flush() }
+        layer.enqueue(sb)
+        pip?.invalidatePlaybackState()
+    }
+
+    private static func sampleBuffer(_ cg: CGImage) -> CMSampleBuffer? {
+        var pb: CVPixelBuffer?
+        let attrs = [kCVPixelBufferCGImageCompatibilityKey: true, kCVPixelBufferCGBitmapContextCompatibilityKey: true,
+                     kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary
+        guard CVPixelBufferCreate(kCFAllocatorDefault, cg.width, cg.height, kCVPixelFormatType_32BGRA, attrs, &pb) == kCVReturnSuccess,
+              let buf = pb else { return nil }
+        CVPixelBufferLockBaseAddress(buf, [])
+        let ctx = CGContext(data: CVPixelBufferGetBaseAddress(buf), width: cg.width, height: cg.height, bitsPerComponent: 8,
+                            bytesPerRow: CVPixelBufferGetBytesPerRow(buf), space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        ctx?.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+        CVPixelBufferUnlockBaseAddress(buf, [])
+        var fmt: CMVideoFormatDescription?
+        CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: buf, formatDescriptionOut: &fmt)
+        guard let f = fmt else { return nil }
+        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 1), presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()), decodeTimeStamp: .invalid)
+        var out: CMSampleBuffer?
+        CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: buf, formatDescription: f, sampleTiming: &timing, sampleBufferOut: &out)
+        if let o = out, let arr = CMSampleBufferGetSampleAttachmentsArray(o, createIfNecessary: true), CFArrayGetCount(arr) > 0 {
+            let dict = unsafeBitCast(CFArrayGetValueAtIndex(arr, 0), to: CFMutableDictionary.self)
+            CFDictionarySetValue(dict, Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                                 Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
+        }
+        return out
+    }
+
+    // MARK: playback delegate (the window's buttons)
+
+    func pictureInPictureController(_ c: AVPictureInPictureController, setPlaying playing: Bool) {
+        if RouteRunner.shared.isActive { RouteRunner.shared.togglePause() }
+        else if HopRunner.shared.isRunning { HopRunner.shared.togglePause() }
+        pushFrame()
+    }
+
+    func pictureInPictureControllerTimeRangeForPlayback(_ c: AVPictureInPictureController) -> CMTimeRange {
+        CMTimeRange(start: .zero, duration: CMTime(value: 86_400, timescale: 1))   // finite range = skip buttons shown
+    }
+
+    func pictureInPictureControllerIsPlaybackPaused(_ c: AVPictureInPictureController) -> Bool {
+        RouteRunner.shared.state == .paused || HopRunner.shared.paused
+    }
+
+    func pictureInPictureController(_ c: AVPictureInPictureController, didTransitionToRenderSize newRenderSize: CMVideoDimensions) {}
+
+    func pictureInPictureController(_ c: AVPictureInPictureController, skipByInterval skipInterval: CMTime, completion completionHandler: @escaping () -> Void) {
+        let step: Double = UserDefaults.standard.bool(forKey: "routeWalking") ? 1 : 5
+        RouteRunner.shared.changeSpeed(by: skipInterval.seconds < 0 ? -step : step)
+        pushFrame()
+        completionHandler()
+    }
+
+    // MARK: window delegate
+
+    func pictureInPictureController(_ c: AVPictureInPictureController, restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void) {
+        restoring = true                                     // "back to app" button: just close the window
+        completionHandler(true)
+    }
+
+    func pictureInPictureControllerDidStopPictureInPicture(_ c: AVPictureInPictureController) {
+        defer { restoring = false; closingByApp = false }
+        guard !restoring, !closingByApp else { return }
+        // ✕ = stop simulating
+        HopRunner.shared.stop()
+        RouteRunner.shared.stop()
+        LocSimManager.stopLocSim()
+        UserDefaults.standard.set("", forKey: "activeLoc")
+        NotificationCenter.default.post(name: .simStoppedFromPiP, object: nil)
+        refresh()
     }
 }
