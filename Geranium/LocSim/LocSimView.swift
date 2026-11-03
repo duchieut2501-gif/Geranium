@@ -203,7 +203,9 @@ struct LocSimView: View {
                           northTick: northTick,
                           onHeadingChanged: { mapHeading = $0 },
                           routePath: route.displayPath,
-                          routeID: route.pathID)
+                          routeID: route.pathID,
+                          altPath: route.altDisplay,
+                          altID: route.altID)
                 .ignoresSafeArea(edges: .bottom)
 
             CenterPin()
@@ -252,6 +254,8 @@ struct LocSimView: View {
                 HopBanner(onStop: { HopRunner.shared.stop() })      // keeps the last hop location
                     .padding(.horizontal, 12)
                 RouteBanner(onStop: { RouteRunner.shared.finishHere() }, onAddPin: addPinToTrip, onAddFromList: { addNextSheet = true })
+                    .padding(.horizontal, 12)
+                SuggestBanner()
                     .padding(.horizontal, 12)
                 Spacer()
             }
@@ -1351,6 +1355,14 @@ final class RouteRunner: ObservableObject {
     @Published var points: [Bookmark] = []                   // last chosen points (kept for next time)
     @Published private(set) var extending = false             // finding the road to an added point
     @Published private(set) var atLight = false               // waiting at a (simulated) red light
+    /// A faster road to the next point, found while driving.
+    struct Suggestion { let coords: [CLLocationCoordinate2D]; let savedSec: Double; let toD: Double; let fromD: Double; let auto: Bool }
+    @Published private(set) var suggestion: Suggestion? = nil
+    @Published private(set) var altDisplay: [CLLocationCoordinate2D] = []
+    @Published private(set) var altID = UUID()
+    @Published private(set) var switchedNote: String? = nil
+    private var suggestTimer: Timer?
+    private var checking = false
     /// Simulated red lights: path distance + seconds to wait.
     private var lights: [(d: Double, sec: Int)] = []
 
@@ -1453,6 +1465,126 @@ final class RouteRunner: ObservableObject {
         BackgroundKeeper.shared.update()
         tick()
         startTimer()
+        startSuggestTimer()
+    }
+
+    private func startSuggestTimer() {
+        suggestTimer?.invalidate()
+        let t = Timer(timeInterval: 150, repeats: true) { [weak self] _ in self?.checkReroute() }
+        RunLoop.main.add(t, forMode: .common)
+        suggestTimer = t
+    }
+
+    private func setSuggestion(_ sg: Suggestion?) {
+        suggestion = sg
+        altDisplay = sg?.coords.map { CoordTransform.wgs84ToGcj02($0) } ?? []
+        altID = UUID()
+    }
+
+    func dismissSuggestion() { setSuggestion(nil) }
+
+    /// Looks for a faster road from here to the next chosen point (like Google Maps does).
+    func checkReroute() {
+        let ud = UserDefaults.standard
+        guard ud.object(forKey: "routeSuggest") as? Bool ?? true,
+              state == .running, !checking, !extending, suggestion == nil,
+              let cur = current, cur.dir > 0, path.count >= 2 else { return }
+        let toD = marks.sorted().first { $0 > cur.pathD + 1 } ?? pathLength
+        let remaining = toD - cur.pathD
+        guard remaining > 500 else { return }
+        let target = pointOnPath(toD)
+        checking = true
+        let req = MKDirections.Request()
+        req.source = MKMapItem(placemark: MKPlacemark(coordinate: CoordTransform.wgs84ToGcj02(cur.c)))
+        req.destination = MKMapItem(placemark: MKPlacemark(coordinate: CoordTransform.wgs84ToGcj02(target)))
+        req.transportType = ud.bool(forKey: "routeWalking") ? .walking : .automobile
+        req.requestsAlternateRoutes = true
+        MKDirections(request: req).calculate { [weak self] resp, _ in
+            guard let self else { return }
+            self.checking = false
+            guard self.state == .running, self.suggestion == nil, let routes = resp?.routes, !routes.isEmpty else { return }
+            // time of the road we are on now: the Apple route of the same length, or estimated
+            let same = routes.first { abs($0.distance - remaining) / remaining < 0.03 }
+            let best = routes.min { $0.expectedTravelTime < $1.expectedTravelTime }!
+            let currentTime = same?.expectedTravelTime ?? remaining / max(best.distance / max(best.expectedTravelTime, 1), 0.5)
+            guard let cand = routes.filter({ abs($0.distance - remaining) / remaining >= 0.03 })
+                    .min(by: { $0.expectedTravelTime < $1.expectedTravelTime }),
+                  currentTime - cand.expectedTravelTime >= 60 else { return }
+            let poly = cand.polyline
+            var cs = [CLLocationCoordinate2D](repeating: kCLLocationCoordinate2DInvalid, count: poly.pointCount)
+            poly.getCoordinates(&cs, range: NSRange(location: 0, length: poly.pointCount))
+            let wgs = cs.map { CoordTransform.gcj02ToWgs84($0) }
+            let auto = ud.object(forKey: "routeAutoSwitch") as? Bool ?? false
+            let sg = Suggestion(coords: wgs, savedSec: currentTime - cand.expectedTravelTime, toD: toD, fromD: cur.pathD, auto: auto)
+            if auto {
+                self.apply(sg)
+                self.switchedNote = L("Đã đổi sang tuyến nhanh hơn \(Int((sg.savedSec / 60).rounded())) phút",
+                                      "Switched to a road \(Int((sg.savedSec / 60).rounded())) min faster")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 6) { self.switchedNote = nil }
+            } else {
+                self.setSuggestion(sg)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+                    if self?.suggestion?.toD == sg.toD, self?.suggestion?.fromD == sg.fromD { self?.setSuggestion(nil) }
+                }
+            }
+        }
+    }
+
+    func acceptSuggestion() {
+        guard let sg = suggestion else { return }
+        setSuggestion(nil)
+        apply(sg)
+    }
+
+    private func pointOnPath(_ d: Double) -> CLLocationCoordinate2D {
+        var run: Double = 0
+        for i in 1..<path.count {
+            let seg = CLLocation(latitude: path[i - 1].latitude, longitude: path[i - 1].longitude)
+                .distance(from: CLLocation(latitude: path[i].latitude, longitude: path[i].longitude))
+            if run + seg >= d {
+                let t = seg > 0 ? (d - run) / seg : 0
+                return CLLocationCoordinate2D(latitude: path[i - 1].latitude + (path[i].latitude - path[i - 1].latitude) * t,
+                                              longitude: path[i - 1].longitude + (path[i].longitude - path[i - 1].longitude) * t)
+            }
+            run += seg
+        }
+        return path.last!
+    }
+
+    /// Swaps the road from where the car is now to the next point for the new one.
+    private func apply(_ sg: Suggestion) {
+        guard state != .idle, let cur = current, sg.coords.count >= 2 else { return }
+        let fromD = cur.pathD
+        guard sg.toD > fromD else { return }
+        var cum: [Double] = [0]
+        for i in 1..<path.count {
+            cum.append(cum[i - 1] + CLLocation(latitude: path[i - 1].latitude, longitude: path[i - 1].longitude)
+                .distance(from: CLLocation(latitude: path[i].latitude, longitude: path[i].longitude)))
+        }
+        var newPath = Array(path[0...max((cum.lastIndex { $0 <= fromD } ?? 0), 0)])
+        newPath.append(cur.c)
+        newPath += sg.coords.dropFirst()
+        let after = cum.indices.filter { cum[$0] > sg.toD + 0.5 }.map { path[$0] }
+        newPath += after
+        var newLen: Double = 0
+        for i in 1..<sg.coords.count {
+            newLen += CLLocation(latitude: sg.coords[i - 1].latitude, longitude: sg.coords[i - 1].longitude)
+                .distance(from: CLLocation(latitude: sg.coords[i].latitude, longitude: sg.coords[i].longitude))
+        }
+        let delta = newLen - (sg.toD - fromD)
+        marks = marks.map { $0 > fromD + 0.5 ? $0 + delta : $0 }
+        let keptLights = lights.filter { $0.d <= fromD || $0.d >= sg.toD }.map { (d: $0.d >= sg.toD ? $0.d + delta : $0.d, sec: $0.sec) }
+        path = newPath
+        lights = (keptLights + makeLights(from: fromD + 30, to: fromD + newLen)).sorted { $0.d < $1.d }
+        let keep = max(lastIndex, 0)
+        let prefix = Array(samples[...min(keep, samples.count - 1)])
+        let plan = makePlan(from: fromD, dir: 1, travelled: cur.dist, first: false)
+        samples = prefix + plan.0
+        loopStart = plan.1.map { prefix.count + $0 }
+        total = samples.last?.dist ?? 0
+        displayPath = path.map { CoordTransform.wgs84ToGcj02($0) }
+        pathID = UUID()
+        if usingSystem && state != .paused { upload(from: keep) }
     }
 
     private func startTimer() {
@@ -1559,6 +1691,8 @@ final class RouteRunner: ObservableObject {
     /// Ends the trip and removes the line. The caller sets / stops the location afterwards.
     func stop() {
         timer?.invalidate(); timer = nil
+        suggestTimer?.invalidate(); suggestTimer = nil
+        if suggestion != nil { setSuggestion(nil) }
         state = .idle
         currentSpeedKmh = 0
         samples = []
@@ -2039,6 +2173,10 @@ struct RouteSetupView: View {
     @AppStorage("routeLightFreq") private var lightFreq = 1
     @AppStorage("routeLightMin") private var lightMin: String = "15"
     @AppStorage("routeLightMax") private var lightMax: String = "60"
+    @AppStorage("routeChoose") private var chooseRoad = true
+    @AppStorage("routeSuggest") private var suggestRoad = true
+    @AppStorage("routeAutoSwitch") private var autoSwitch = false
+    @State private var chooser: [[RouteOption]]? = nil
     @State private var picked: [Bookmark] = RouteRunner.shared.points
     @State private var busy: String? = nil
     @State private var segSpeeds: [String: Double] = [:]          // custom speed per leg (key = from>to)
@@ -2125,6 +2263,11 @@ struct RouteSetupView: View {
                             Text("km/h").foregroundColor(.secondary)
                         }
                     }
+                    Toggle(L("Chọn tuyến trước khi chạy", "Choose the road before starting"), isOn: $chooseRoad)
+                    Toggle(L("Gợi ý tuyến nhanh hơn khi đang chạy", "Suggest faster roads while driving"), isOn: $suggestRoad)
+                    if suggestRoad {
+                        Toggle(L("Tự đổi sang tuyến nhanh hơn", "Switch automatically"), isOn: $autoSwitch)
+                    }
                     Toggle(L("Dừng đèn đỏ", "Stop at red lights"), isOn: $lights)
                     if lights {
                         Picker(L("Tần suất", "How often"), selection: $lightFreq) {
@@ -2173,6 +2316,14 @@ struct RouteSetupView: View {
                         .disabled(picked.count < 2 || (speed ?? 0) <= 0 || busy != nil)
                 }
             }
+            .fullScreenCover(isPresented: Binding(get: { chooser != nil }, set: { if !$0 { chooser = nil } })) {
+                if let opts = chooser {
+                    RouteChooserView(options: opts, onDone: { ch in
+                        chooser = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { finish(opts, choices: ch) }
+                    }, onCancel: { chooser = nil })
+                }
+            }
             .overlay {
                 if let busy {
                     VStack(spacing: 10) {
@@ -2190,20 +2341,29 @@ struct RouteSetupView: View {
         hideKeyboard()
         RouteRunner.shared.points = picked
         busy = L("Đang tìm đường…", "Finding the route…")
-        RouteRunner.buildRoute(points: picked, walking: walking, progress: { i, n in
+        RouteRunner.buildOptions(points: picked, walking: walking, progress: { i, n in
             busy = n > 1 ? L("Đang tìm đường \(i)/\(n)…", "Finding the route \(i)/\(n)…") : L("Đang tìm đường…", "Finding the route…")
         }, done: { result in
             busy = nil
             switch result {
-            case .success(let (path, marks)):
-                let base = speed ?? 40
-                let legs = (0..<max(picked.count - 1, 1)).map { segSpeeds[segKey($0)] ?? base }
-                onStart(path, marks, base, legs, vary, Int(stopSecText) ?? 0, RouteEnd(rawValue: endRaw) ?? .stop)
-                dismiss()
+            case .success(let opts):
+                if chooseRoad && opts.contains(where: { $0.count > 1 }) {
+                    chooser = opts
+                } else {
+                    finish(opts, choices: opts.map { o in o.indices.min { o[$0].time < o[$1].time } ?? 0 })
+                }
             case .failure(let e):
                 UIApplication.shared.alert(body: L("Không tìm được đường: ", "Could not find a route: ") + e.localizedDescription)
             }
         })
+    }
+
+    private func finish(_ opts: [[RouteOption]], choices: [Int]) {
+        let (path, marks) = RouteRunner.assemble(opts, choices: choices)
+        let base = speed ?? 40
+        let legs = (0..<max(picked.count - 1, 1)).map { segSpeeds[segKey($0)] ?? base }
+        onStart(path, marks, base, legs, vary, Int(stopSecText) ?? 0, RouteEnd(rawValue: endRaw) ?? .stop)
+        dismiss()
     }
 }
 
@@ -2547,5 +2707,213 @@ struct RepeatButton: View {
                     pressed = false
                     timer?.invalidate(); timer = nil
                 })
+    }
+}
+
+/// "Faster road found" prompt while driving.
+struct SuggestBanner: View {
+    @ObservedObject var runner = RouteRunner.shared
+    var body: some View {
+        if let sg = runner.suggestion {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.triangle.branch").font(.system(size: 18, weight: .semibold)).foregroundColor(.orange)
+                Text(L("Có tuyến nhanh hơn \(max(Int((sg.savedSec / 60).rounded()), 1)) phút", "Faster road: \(max(Int((sg.savedSec / 60).rounded()), 1)) min saved"))
+                    .font(.footnote.weight(.semibold)).lineLimit(2)
+                Spacer(minLength: 4)
+                Button(L("Bỏ qua", "Ignore")) { runner.dismissSuggestion() }
+                    .font(.footnote).foregroundColor(.secondary)
+                Button { runner.acceptSuggestion() } label: {
+                    Text(L("Đổi tuyến", "Switch")).font(.footnote.weight(.bold)).foregroundColor(.white)
+                        .padding(.horizontal, 12).padding(.vertical, 7).background(Capsule().fill(Color.orange))
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial))
+            .shadow(color: .black.opacity(0.15), radius: 5, y: 2)
+        } else if let note = runner.switchedNote {
+            Label(note, systemImage: "checkmark.circle.fill")
+                .font(.footnote.weight(.semibold))
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Capsule().fill(.ultraThinMaterial))
+        }
+    }
+}
+
+// MARK: - Choose between Apple's alternative roads before starting
+
+struct RouteOption { let coords: [CLLocationCoordinate2D]; let distance: Double; let time: Double }
+
+extension RouteRunner {
+    /// Up to 3 roads per leg (Apple Maps alternatives).
+    static func buildOptions(points: [Bookmark], walking: Bool,
+                             progress: @escaping (Int, Int) -> Void,
+                             done: @escaping (Result<[[RouteOption]], Error>) -> Void) {
+        Task {
+            var all: [[RouteOption]] = []
+            let legs = points.count - 1
+            for i in 0..<legs {
+                await MainActor.run { progress(i + 1, legs) }
+                let req = MKDirections.Request()
+                req.source = MKMapItem(placemark: MKPlacemark(coordinate: CoordTransform.wgs84ToGcj02(points[i].coordinate)))
+                req.destination = MKMapItem(placemark: MKPlacemark(coordinate: CoordTransform.wgs84ToGcj02(points[i + 1].coordinate)))
+                req.transportType = walking ? .walking : .automobile
+                req.requestsAlternateRoutes = true
+                var response: MKDirections.Response?
+                for attempt in 0..<4 {
+                    do { response = try await MKDirections(request: req).calculate(); break }
+                    catch {
+                        if attempt == 3 { await MainActor.run { done(.failure(error)) }; return }
+                        try? await Task.sleep(nanoseconds: UInt64(2_000_000_000 * (attempt + 1)))
+                    }
+                }
+                let routes = Array((response?.routes ?? []).prefix(3))
+                guard !routes.isEmpty else {
+                    await MainActor.run { done(.failure(NSError(domain: "route", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                        L("Không tìm được đường từ điểm \(i + 1) đến điểm \(i + 2).", "No route from point \(i + 1) to point \(i + 2).")]))) }
+                    return
+                }
+                all.append(routes.map { r in
+                    var cs = [CLLocationCoordinate2D](repeating: kCLLocationCoordinate2DInvalid, count: r.polyline.pointCount)
+                    r.polyline.getCoordinates(&cs, range: NSRange(location: 0, length: r.polyline.pointCount))
+                    return RouteOption(coords: cs.map { CoordTransform.gcj02ToWgs84($0) }, distance: r.distance, time: r.expectedTravelTime)
+                })
+                if legs > 1 { try? await Task.sleep(nanoseconds: 300_000_000) }
+            }
+            await MainActor.run { done(.success(all)) }
+        }
+    }
+
+    /// Joins the chosen road of every leg into one path + the distances of the stops.
+    static func assemble(_ options: [[RouteOption]], choices: [Int]) -> ([CLLocationCoordinate2D], [Double]) {
+        var all: [CLLocationCoordinate2D] = []
+        var marks: [Double] = []
+        var run: Double = 0
+        for (i, legOpts) in options.enumerated() {
+            var cs = legOpts[min(choices[i], legOpts.count - 1)].coords
+            if !all.isEmpty, !cs.isEmpty { cs.removeFirst() }
+            for c in cs {
+                if let last = all.last { run += CLLocation(latitude: last.latitude, longitude: last.longitude)
+                    .distance(from: CLLocation(latitude: c.latitude, longitude: c.longitude)) }
+                all.append(c)
+            }
+            if i < options.count - 1 { marks.append(run) }
+        }
+        return (all, marks)
+    }
+}
+
+/// Map that draws the roads of one leg: the chosen one blue, the others grey.
+struct RouteOptionsMap: UIViewRepresentable {
+    var options: [[CLLocationCoordinate2D]]     // map coordinates
+    var selected: Int
+
+    func makeUIView(context: Context) -> MKMapView {
+        let m = MKMapView()
+        m.delegate = context.coordinator
+        m.showsUserLocation = true
+        return m
+    }
+
+    func updateUIView(_ m: MKMapView, context: Context) {
+        let sig = "\(options.map { $0.count })-\(selected)-\(options.first?.first?.latitude ?? 0)"
+        guard sig != context.coordinator.sig else { return }
+        let firstTime = context.coordinator.sig.isEmpty || context.coordinator.legSig != "\(options.map { $0.count })"
+        context.coordinator.sig = sig
+        context.coordinator.legSig = "\(options.map { $0.count })"
+        m.removeOverlays(m.overlays)
+        for (i, o) in options.enumerated() where i != selected && o.count >= 2 {
+            let pl = MKPolyline(coordinates: o, count: o.count); pl.title = "alt"
+            m.addOverlay(pl, level: .aboveRoads)
+        }
+        if options.indices.contains(selected), options[selected].count >= 2 {
+            let o = options[selected]
+            let pl = MKPolyline(coordinates: o, count: o.count); pl.title = "sel"
+            m.addOverlay(pl, level: .aboveRoads)
+            if firstTime {
+                var rect = pl.boundingMapRect
+                for x in options where x.count >= 2 { rect = rect.union(MKPolyline(coordinates: x, count: x.count).boundingMapRect) }
+                m.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 60, left: 40, bottom: 60, right: 40), animated: false)
+            }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    class Coordinator: NSObject, MKMapViewDelegate {
+        var sig = ""
+        var legSig = ""
+        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            guard let line = overlay as? MKPolyline else { return MKOverlayRenderer(overlay: overlay) }
+            let r = MKPolylineRenderer(polyline: line)
+            let sel = line.title == "sel"
+            r.strokeColor = sel ? UIColor.systemBlue : UIColor.systemGray.withAlphaComponent(0.7)
+            r.lineWidth = sel ? 6 : 5
+            r.lineCap = .round; r.lineJoin = .round
+            return r
+        }
+    }
+}
+
+/// Before starting: pick a road for each leg (only legs with more than one road are asked).
+struct RouteChooserView: View {
+    let options: [[RouteOption]]
+    var onDone: ([Int]) -> Void
+    var onCancel: () -> Void
+    @State private var choices: [Int] = []
+    @State private var leg = 0
+
+    private var askLegs: [Int] { options.indices.filter { options[$0].count > 1 } }
+    private func fastest(_ i: Int) -> Int { options[i].indices.min { options[i][$0].time < options[i][$1].time } ?? 0 }
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                if options.indices.contains(leg) {
+                    RouteOptionsMap(options: options[leg].map { $0.coords.map { CoordTransform.wgs84ToGcj02($0) } },
+                                    selected: choices.indices.contains(leg) ? choices[leg] : 0)
+                    VStack(spacing: 8) {
+                        ForEach(options[leg].indices, id: \.self) { i in
+                            let o = options[leg][i]
+                            let sel = choices.indices.contains(leg) && choices[leg] == i
+                            Button {
+                                if choices.indices.contains(leg) { choices[leg] = i }
+                            } label: {
+                                HStack {
+                                    Image(systemName: sel ? "checkmark.circle.fill" : "circle")
+                                        .foregroundColor(sel ? .accentColor : .secondary)
+                                    Text(L("Tuyến \(i + 1)", "Road \(i + 1)")).font(.subheadline.weight(.semibold)).foregroundColor(.primary)
+                                    if i == fastest(leg) { Text(L("nhanh nhất", "fastest")).font(.caption).foregroundColor(.green) }
+                                    Spacer()
+                                    Text(String(format: "%.1f km · %d %@", o.distance / 1000, Int((o.time / 60).rounded()), L("phút", "min")))
+                                        .font(.subheadline.monospacedDigit()).foregroundColor(.secondary)
+                                }
+                                .padding(.horizontal, 14).padding(.vertical, 10)
+                                .background(RoundedRectangle(cornerRadius: 12).fill(sel ? Color.accentColor.opacity(0.12) : Color(.secondarySystemBackground)))
+                            }
+                        }
+                        Button {
+                            if let next = askLegs.first(where: { $0 > leg }) { leg = next } else { onDone(choices) }
+                        } label: {
+                            Text(askLegs.contains(where: { $0 > leg }) ? L("Đi tuyến này, sang đoạn tiếp", "Use this road, next leg") : L("Đi tuyến này", "Use this road"))
+                                .font(.body.weight(.semibold)).foregroundColor(.white)
+                                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                                .background(RoundedRectangle(cornerRadius: 12).fill(Color.accentColor))
+                        }
+                    }
+                    .padding(12)
+                }
+            }
+            .navigationTitle(askLegs.count > 1 ? L("Chọn tuyến – đoạn \(leg + 1) → \(leg + 2)", "Choose road – leg \(leg + 1) → \(leg + 2)") : L("Chọn tuyến", "Choose road"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) { Button(L("Huỷ", "Cancel"), action: onCancel) }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(L("Nhanh nhất hết", "All fastest")) { onDone(options.indices.map { fastest($0) }) }
+                }
+            }
+            .onAppear {
+                choices = options.indices.map { fastest($0) }
+                leg = askLegs.first ?? 0
+            }
+        }
     }
 }

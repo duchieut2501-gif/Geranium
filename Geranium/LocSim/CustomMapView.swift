@@ -29,6 +29,9 @@ struct CustomMapView: UIViewRepresentable {
     /// Road route to draw (map coordinates); empty = none.
     var routePath: [CLLocationCoordinate2D] = []
     var routeID: UUID? = nil
+    /// Suggested faster road (orange), empty = none.
+    var altPath: [CLLocationCoordinate2D] = []
+    var altID: UUID? = nil
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
@@ -51,11 +54,16 @@ struct CustomMapView: UIViewRepresentable {
                 mapView.setCenter(loc, animated: true)   // keep the current zoom level
             }
         }
-        if routeID != c.lastRouteID {
+        if routeID != c.lastRouteID || altID != c.lastAltID {
             c.lastRouteID = routeID
+            c.lastAltID = altID
             mapView.removeOverlays(mapView.overlays)
             if routePath.count >= 2 {
                 mapView.addOverlay(MKPolyline(coordinates: routePath, count: routePath.count), level: .aboveRoads)
+            }
+            if altPath.count >= 2 {
+                let pl = MKPolyline(coordinates: altPath, count: altPath.count); pl.title = "alt"
+                mapView.addOverlay(pl, level: .aboveRoads)
             }
         }
         if northTick != c.lastNorthTick {
@@ -93,6 +101,7 @@ struct CustomMapView: UIViewRepresentable {
         var lastRecenterTick = 0
         var lastNorthTick = 0
         var lastRouteID: UUID?
+        var lastAltID: UUID?
         private var lastHeading: Double = 0
         var lastFocus: EquatableCoordinate?
         var lastZoomID: UUID?
@@ -106,8 +115,10 @@ struct CustomMapView: UIViewRepresentable {
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             guard let line = overlay as? MKPolyline else { return MKOverlayRenderer(overlay: overlay) }
             let r = MKPolylineRenderer(polyline: line)
-            r.strokeColor = UIColor.systemBlue.withAlphaComponent(0.8)
+            let alt = line.title == "alt"
+            r.strokeColor = alt ? UIColor.systemOrange : UIColor.systemBlue.withAlphaComponent(0.8)
             r.lineWidth = 5
+            if alt { r.lineDashPattern = [2, 8] }
             r.lineCap = .round
             r.lineJoin = .round
             return r
