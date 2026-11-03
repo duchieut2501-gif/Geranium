@@ -288,11 +288,11 @@ struct LocSimView: View {
                     }
                 }
                 HopBanner(onStop: { HopRunner.shared.stop() })      // keeps the last hop location
-                    .padding(.horizontal, 12)
+                    .padding(.leading, 12).padding(.trailing, 48)
                 RouteBanner(onStop: { RouteRunner.shared.finishHere() }, onAddPin: addPinToTrip, onAddFromList: { addNextSheet = true })
-                    .padding(.horizontal, 12)
+                    .padding(.leading, 12).padding(.trailing, 48)
                 SuggestBanner()
-                    .padding(.horizontal, 12)
+                    .padding(.leading, 12).padding(.trailing, 48)
                 Spacer()
             }
 
@@ -307,14 +307,18 @@ struct LocSimView: View {
             .zIndex(2)
 
             // Vertical zoom slider at the right edge: drag down = zoom in, up = zoom out. Centre stays put.
-            HStack {
+            VStack {
                 Spacer()
-                ZoomSlider(level: $zoomLevel, onChange: { level in
-                    zoomRequest = ZoomRequest(level: level)
-                }, onReset: {
-                    zoomRequest = ZoomRequest(reset: true)
-                })
-                .padding(.trailing, 6)
+                HStack {
+                    Spacer()
+                    ZoomSlider(level: $zoomLevel, onChange: { level in
+                        zoomRequest = ZoomRequest(level: level)
+                    }, onReset: {
+                        zoomRequest = ZoomRequest(reset: true)
+                    })
+                    .padding(.trailing, 6)
+                }
+                .padding(.bottom, 142)          // sits above the compass + location buttons
             }
 
             VStack(spacing: 10) {
@@ -832,11 +836,11 @@ struct CustomizeAppView: View {
                 Section {
                     Toggle(L("Cửa sổ nổi (hình trong hình)", "Floating window (picture in picture)"), isOn: $pipEnabled)
                     if pipEnabled {
-                        Picker(L("Khi nào hiện", "When to show"), selection: $pipMode) {
-                            Text(L("Tự hiện khi thoát app", "When leaving the app")).tag("auto")
-                            Text(L("Chỉ khi bấm nút", "Only with the button")).tag("button")
+                        Picker("", selection: $pipMode) {
+                            Text(L("Khi thoát app", "On leaving app")).tag("auto")
+                            Text(L("Khi bấm nút", "With button")).tag("button")
                         }
-                        .pickerStyle(.inline)
+                        .pickerStyle(.segmented)
                     }
                 } header: {
                     Text(L("Cửa sổ nổi", "Floating window"))
@@ -2418,7 +2422,7 @@ struct RouteSetupView: View {
             busy = nil
             switch result {
             case .success(let opts):
-                if chooseRoad && opts.contains(where: { $0.count > 1 }) {
+                if chooseRoad {
                     chooser = opts
                 } else {
                     finish(opts, choices: opts.map { o in o.indices.min { o[$0].time < o[$1].time } ?? 0 })
@@ -2932,7 +2936,10 @@ struct RouteChooserView: View {
     @State private var choices: [Int] = []
     @State private var leg = 0
 
-    private var askLegs: [Int] { options.indices.filter { options[$0].count > 1 } }
+    private var askLegs: [Int] {
+        let multi = options.indices.filter { options[$0].count > 1 }
+        return multi.isEmpty ? [0] : multi                          // always preview at least the first leg
+    }
     private func fastest(_ i: Int) -> Int { options[i].indices.min { options[i][$0].time < options[i][$1].time } ?? 0 }
 
     var body: some View {

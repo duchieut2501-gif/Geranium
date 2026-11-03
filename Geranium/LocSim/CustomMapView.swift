@@ -208,7 +208,7 @@ struct ZoomSlider: View {
     @Binding var level: Double
     var onChange: (Double) -> Void
     var onReset: () -> Void = {}
-    private let height: CGFloat = 220
+    private let height: CGFloat = 170
 
     var body: some View {
         VStack(spacing: 6) {
