@@ -40,6 +40,7 @@ extern "C" int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t *__res
 extern "C" int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *__restrict, uid_t);
 
 static const CGFloat kBubble = 54;
+static const CGFloat kPillH = 108;   // bubble = pill: top half opens the panel, bottom half stops
 static const CGFloat kPanelW = 330, kPanelH = 132;
 
 #pragma mark - Window (only as big as the bubble / panel, so the rest of the screen stays touchable)
@@ -93,16 +94,23 @@ static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
     self.view.backgroundColor = UIColor.clearColor;
 
     // Bubble
-    _bubble = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kBubble, kBubble)];
+    _bubble = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kBubble, kPillH)];
     _bubble.backgroundColor = [UIColor colorWithRed:0.93 green:0.26 blue:0.24 alpha:0.95];
     _bubble.layer.cornerRadius = kBubble / 2;
     _bubble.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.9].CGColor;
     _bubble.layer.borderWidth = 2;
     UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"location.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightSemibold]]];
     icon.tintColor = UIColor.whiteColor;
-    icon.center = CGPointMake(kBubble / 2, kBubble / 2);
+    icon.center = CGPointMake(kBubble / 2, kPillH / 4);
     [_bubble addSubview:icon];
-    [_bubble addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(toggle)]];
+    UIView *line = [[UIView alloc] initWithFrame:CGRectMake(10, kPillH / 2 - 0.5, kBubble - 20, 1)];
+    line.backgroundColor = [UIColor colorWithWhite:1 alpha:0.6];
+    [_bubble addSubview:line];
+    UIImageView *stopIcon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"stop.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightBold]]];
+    stopIcon.tintColor = UIColor.whiteColor;
+    stopIcon.center = CGPointMake(kBubble / 2, kPillH * 3 / 4);
+    [_bubble addSubview:stopIcon];
+    [_bubble addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(pillTap:)]];
     [_bubble addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)]];
     [self.view addSubview:_bubble];
 
@@ -180,8 +188,8 @@ static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
         self.win.frame = CGRectMake(x, y, kPanelW, kPanelH);
         _panel.frame = CGRectMake(0, 0, kPanelW, kPanelH);
     } else {
-        self.win.frame = CGRectMake(_bubbleOrigin.x, _bubbleOrigin.y, kBubble, kBubble);
-        _bubble.frame = CGRectMake(0, 0, kBubble, kBubble);
+        self.win.frame = CGRectMake(_bubbleOrigin.x, _bubbleOrigin.y, kBubble, kPillH);
+        _bubble.frame = CGRectMake(0, 0, kBubble, kPillH);
     }
     _bubble.hidden = _expanded;
     _panel.hidden = !_expanded;
@@ -213,12 +221,22 @@ static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
 
 - (void)toggle { _expanded = !_expanded; [self place]; }
 
+/// Top half = open the panel, bottom half = stop simulating.
+- (void)pillTap:(UITapGestureRecognizer *)g {
+    if ([g locationInView:_bubble].y > kPillH / 2) {
+        [[UIImpactFeedbackGenerator.alloc initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+        [self stopTap];
+    } else {
+        [self toggle];
+    }
+}
+
 - (void)pan:(UIPanGestureRecognizer *)g {
     CGPoint d = [g translationInView:nil];
     [g setTranslation:CGPointZero inView:nil];
     CGSize scr = UIScreen.mainScreen.bounds.size;
     _bubbleOrigin.x = MIN(MAX(_bubbleOrigin.x + d.x, 0), scr.width - kBubble);
-    _bubbleOrigin.y = MIN(MAX(_bubbleOrigin.y + d.y, 40), scr.height - kBubble - 20);
+    _bubbleOrigin.y = MIN(MAX(_bubbleOrigin.y + d.y, 40), scr.height - kPillH - 20);
     if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
         _bubbleOrigin.x = (_bubbleOrigin.x + kBubble / 2 < scr.width / 2) ? 6 : scr.width - kBubble - 6;   // stick to the edge
         [NSStringFromCGPoint(_bubbleOrigin) writeToFile:POS_PATH atomically:YES encoding:NSUTF8StringEncoding error:nil];
