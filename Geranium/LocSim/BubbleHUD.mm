@@ -70,6 +70,7 @@ static void SendCommand(int cmd) {
     UIView *_panel;
     UILabel *_title, *_sub;
     UIButton *_stopBtn, *_pauseBtn, *_minusBtn, *_plusBtn, *_openBtn;
+    double _bgId, _hiddenFor;
     BOOL _expanded, _visible;
     NSDate *_lastSeen;
     CGPoint _bubbleOrigin;
@@ -118,6 +119,13 @@ static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
     _sub.textColor = [UIColor colorWithWhite:0.8 alpha:1];
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
     [close setImage:[UIImage systemImageNamed:@"chevron.down.circle.fill"] forState:UIControlStateNormal];
+    UIButton *hide = [UIButton buttonWithType:UIButtonTypeSystem];
+    [hide setImage:[UIImage systemImageNamed:@"eye.slash.circle.fill"] forState:UIControlStateNormal];
+    hide.tintColor = [UIColor colorWithWhite:0.6 alpha:1];
+    [hide addTarget:self action:@selector(hideTap) forControlEvents:UIControlEventTouchUpInside];
+    hide.translatesAutoresizingMaskIntoConstraints = NO;
+    [hide.widthAnchor constraintEqualToConstant:28].active = YES;
+    [hide.heightAnchor constraintEqualToConstant:28].active = YES;
     close.tintColor = [UIColor colorWithWhite:0.6 alpha:1];
     [close addTarget:self action:@selector(toggle) forControlEvents:UIControlEventTouchUpInside];
     close.translatesAutoresizingMaskIntoConstraints = NO;
@@ -135,7 +143,7 @@ static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
 
     UIStackView *texts = [[UIStackView alloc] initWithArrangedSubviews:@[_title, _sub]];
     texts.axis = UILayoutConstraintAxisVertical; texts.spacing = 2;
-    UIStackView *top = [[UIStackView alloc] initWithArrangedSubviews:@[texts, close]];
+    UIStackView *top = [[UIStackView alloc] initWithArrangedSubviews:@[texts, hide, close]];
     top.alignment = UIStackViewAlignmentTop; top.spacing = 8;
     UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[_openBtn, _stopBtn, _pauseBtn, _minusBtn, _plusBtn]];
     row.distribution = UIStackViewDistributionEqualSpacing;
@@ -190,7 +198,8 @@ static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
     NSData *d = [NSData dataWithContentsOfFile:STATUS_PATH];
     NSDictionary *j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
     if (![j isKindOfClass:NSDictionary.class]) return;
-    BOOL show = [j[@"show"] boolValue];
+    _bgId = [j[@"bgId"] doubleValue];
+    BOOL show = [j[@"show"] boolValue] && _bgId != _hiddenFor;     // hidden by the user until the next time the app is left
     _title.text = j[@"title"] ?: @"";
     _sub.text = j[@"sub"] ?: @"";
     BOOL canPause = [j[@"canPause"] boolValue], canSpeed = [j[@"canSpeed"] boolValue];
@@ -239,6 +248,12 @@ static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
         if ([ws respondsToSelector:@selector(openApplicationWithBundleID:)])
             [ws performSelector:@selector(openApplicationWithBundleID:) withObject:bid];
     }
+}
+/// Hide the bubble (e.g. for a screenshot) until the app is opened and left again.
+- (void)hideTap {
+    _hiddenFor = _bgId;
+    _expanded = NO; _visible = NO;
+    [self place];
 }
 - (void)pauseTap { SendCommand(2); }
 - (void)minusTap { SendCommand(3); }

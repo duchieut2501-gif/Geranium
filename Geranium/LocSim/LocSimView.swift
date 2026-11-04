@@ -3243,6 +3243,8 @@ final class Bubble {
     private var timer: Timer?
     private var last = ""
     private var prepared = false
+    /// Changes each time the app is left (a bubble hidden by the user comes back then).
+    var bgId: Double = Date().timeIntervalSince1970
     private var enabled: Bool { UserDefaults.standard.bool(forKey: "bubbleEnabled") }
 
     func prepare() {
@@ -3263,7 +3265,10 @@ final class Bubble {
         }
         // hidden while the app is open, shown when leaving it
         for n in [UIApplication.didBecomeActiveNotification, UIApplication.willResignActiveNotification, UIApplication.didEnterBackgroundNotification] {
-            NotificationCenter.default.addObserver(forName: n, object: nil, queue: .main) { _ in Bubble.shared.push() }
+            NotificationCenter.default.addObserver(forName: n, object: nil, queue: .main) { note in
+                if note.name == UIApplication.willResignActiveNotification { Bubble.shared.bgId = Date().timeIntervalSince1970 }
+                Bubble.shared.push()
+            }
         }
         refresh()
     }
@@ -3292,7 +3297,7 @@ final class Bubble {
         let r = RouteRunner.shared, h = HopRunner.shared
         let (a, b) = FloatWindow.shared.statusLines
         let dict: [String: Any] = [
-            "show": simulating && !inApp, "title": a, "sub": b,
+            "show": simulating && !inApp, "bgId": bgId, "title": a, "sub": b,
             "paused": r.state == .paused || h.paused,
             "canPause": (r.isActive && r.state != .arrived) || h.isRunning,
             "canSpeed": r.isActive && r.state != .arrived,
