@@ -1286,6 +1286,7 @@ struct HopSetupView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("hopIntervalMs") private var intervalText: String = "1000"
     @AppStorage("hopRandom") private var random = false
+    @State private var setupTab = 0
     @State private var source: LocList = .bookmarks
     @State private var search = ""
     @State private var picked: [Bookmark] = HopRunner.shared.points
@@ -1308,6 +1309,14 @@ struct HopSetupView: View {
     var body: some View {
         NavigationView {
             List {
+                Section {
+                    Picker("", selection: $setupTab) {
+                        Text(L("Thực hiện", "Run")).tag(0)
+                        Text(L("Lịch sử", "History")).tag(1)
+                    }
+                    .pickerStyle(.segmented)
+                }
+                if setupTab == 1 {
                 SessionsSections(kind: "hop", subtitle: { x in
                     L("\(x.points.count) điểm · \(x.intervalMs ?? 1000) ms · \((x.random ?? false) ? "Ngẫu nhiên" : "Theo thứ tự") · \(sessionDateText(x.date))",
                       "\(x.points.count) points · \(x.intervalMs ?? 1000) ms · \((x.random ?? false) ? "Random" : "In order") · \(sessionDateText(x.date))")
@@ -1315,9 +1324,11 @@ struct HopSetupView: View {
                     picked = x.bookmarks
                     intervalText = "\(x.intervalMs ?? 1000)"
                     random = x.random ?? false
+                    setupTab = 0
                 }, onRun: { x in
                     startHop(x.bookmarks, x.intervalMs ?? 1000, x.random ?? false)
                 })
+                } else {
                 Section {
                     HStack {
                         Text(L("Thời gian mỗi lần nhảy", "Time between jumps"))
@@ -1401,6 +1412,7 @@ struct HopSetupView: View {
                     }
                 } header: {
                     Text(L("Lấy điểm từ (bấm theo thứ tự muốn nhảy)", "Take points from (tap in the order to hop)"))
+                }
                 }
             }
             .navigationTitle(L("Nhảy cóc", "Hop"))
@@ -2274,6 +2286,7 @@ struct RouteSetupView: View {
     @AppStorage("routeSuggest") private var suggestRoad = true
     @AppStorage("routeAutoSwitch") private var autoSwitch = false
     @State private var chooser: [[RouteOption]]? = nil
+    @State private var setupTab = 0
     @State private var picked: [Bookmark] = RouteRunner.shared.points
     @State private var busy: String? = nil
     @State private var segSpeeds: [String: Double] = [:]          // custom speed per leg (key = from>to)
@@ -2335,14 +2348,23 @@ struct RouteSetupView: View {
     var body: some View {
         NavigationView {
             List {
+                Section {
+                    Picker("", selection: $setupTab) {
+                        Text(L("Thực hiện", "Run")).tag(0)
+                        Text(L("Lịch sử", "History")).tag(1)
+                    }
+                    .pickerStyle(.segmented)
+                }
+                if setupTab == 1 {
                 SessionsSections(kind: "route", subtitle: { x in
                     let mode = (x.walking ?? false) ? L("Đi bộ", "Walk") : L("Ô tô", "Car")
                     return L("\(x.points.count) điểm · \(mode) \(x.speed ?? "") km/h · \(sessionDateText(x.date))",
                              "\(x.points.count) points · \(mode) \(x.speed ?? "") km/h · \(sessionDateText(x.date))")
-                }, onLoad: { x in load(x) }, onRun: { x in
+                }, onLoad: { x in load(x); setupTab = 0 }, onRun: { x in
                     load(x)
                     DispatchQueue.main.async { begin() }
                 })
+                } else {
                 Section {
                     Picker("", selection: $walking) {
                         Text(L("🚗 Ô tô", "🚗 Car")).tag(false)
@@ -2419,6 +2441,7 @@ struct RouteSetupView: View {
 
                 segmentsSection
                 PointPickerSections(picked: $picked, pinCoordinate: pinCoordinate, numberLabel: { i, _ in "\(i + 1)" })
+                }
             }
             .navigationTitle(L("Đi theo đường", "Follow roads"))
             .navigationBarTitleDisplayMode(.inline)
@@ -3243,6 +3266,7 @@ final class Bubble {
     private var timer: Timer?
     private var last = ""
     private var prepared = false
+    private var restartedThisLaunch = false
     /// Changes each time the app is left (a bubble hidden by the user comes back then).
     var bgId: Double = Date().timeIntervalSince1970
     private var enabled: Bool { UserDefaults.standard.bool(forKey: "bubbleEnabled") }
@@ -3275,7 +3299,7 @@ final class Bubble {
 
     func refresh() {
         if enabled {
-            if !BubbleIsRunning() { BubbleSetEnabled(true) }
+            if !BubbleIsRunning() || !restartedThisLaunch { BubbleSetEnabled(true); restartedThisLaunch = true }
             if timer == nil {
                 let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.push() }
                 RunLoop.main.add(t, forMode: .common)
