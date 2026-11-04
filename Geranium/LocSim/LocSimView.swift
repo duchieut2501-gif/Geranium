@@ -1311,7 +1311,7 @@ struct HopSetupView: View {
             List {
                 Section {
                     Picker("", selection: $setupTab) {
-                        Text(L("Thực hiện", "Run")).tag(0)
+                        Text(L("Thực thi", "Run")).tag(0)
                         Text(L("Lịch sử", "History")).tag(1)
                     }
                     .pickerStyle(.segmented)
@@ -2287,6 +2287,7 @@ struct RouteSetupView: View {
     @AppStorage("routeAutoSwitch") private var autoSwitch = false
     @State private var chooser: [[RouteOption]]? = nil
     @State private var setupTab = 0
+    @AppStorage("routeAdvancedOpen") private var advancedOpen = false
     @State private var picked: [Bookmark] = RouteRunner.shared.points
     @State private var busy: String? = nil
     @State private var segSpeeds: [String: Double] = [:]          // custom speed per leg (key = from>to)
@@ -2350,7 +2351,7 @@ struct RouteSetupView: View {
             List {
                 Section {
                     Picker("", selection: $setupTab) {
-                        Text(L("Thực hiện", "Run")).tag(0)
+                        Text(L("Thực thi", "Run")).tag(0)
                         Text(L("Lịch sử", "History")).tag(1)
                     }
                     .pickerStyle(.segmented)
@@ -2378,6 +2379,21 @@ struct RouteSetupView: View {
                             .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
                         Text("km/h").foregroundColor(.secondary)
                     }
+                    // More options: folded / unfolded, remembered for next time
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { advancedOpen.toggle() }
+                    } label: {
+                        HStack {
+                            Text(L("Tuỳ chọn khác", "More options")).foregroundColor(.primary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.secondary)
+                                .rotationEffect(.degrees(advancedOpen ? 90 : 0))
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    if advancedOpen {
                     Toggle(L("Tốc độ dao động cho giống thật", "Vary the speed a little"), isOn: $vary)
                     if vary {
                         HStack {
@@ -2434,9 +2450,12 @@ struct RouteSetupView: View {
                         ForEach(RouteEnd.allCases) { Text($0.label).tag($0.rawValue) }
                     }
                     Toggle(L("Giao lộ trình cho iOS tự chạy", "Let iOS play the trip"), isOn: $systemPlayback)
+                    }
                 } footer: {
-                    Text(L("Điểm đầu tiên là A, điểm cuối là B, các điểm ở giữa là điểm dừng. Đường đi lấy theo Apple Maps. Bật \"Giao lộ trình cho iOS tự chạy\": vị trí vẫn chạy kể cả khi tắt hẳn app. Tắt: app tự chạy và vẫn chạy ngầm khi ra màn hình chính (hiện biểu tượng định vị xanh).",
-                           "The first point is A, the last is B, points in between are stops. Roads come from Apple Maps. \"Let iOS play the trip\" on: keeps moving even if the app is closed. Off: the app drives it and keeps running in the background (blue location icon)."))
+                    if advancedOpen {
+                        Text(L("Bật \"Giao lộ trình cho iOS tự chạy\": vị trí vẫn chạy kể cả khi tắt hẳn app. Tắt: app tự chạy và vẫn chạy ngầm khi ra màn hình chính (hiện biểu tượng định vị xanh).",
+                               "\"Let iOS play the trip\" on: keeps moving even if the app is closed. Off: the app drives it and keeps running in the background (blue location icon)."))
+                    }
                 }
 
                 segmentsSection
