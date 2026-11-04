@@ -1287,9 +1287,27 @@ struct HopSetupView: View {
     private var interval: Int? { Int(intervalText.trimmingCharacters(in: .whitespaces)) }
     private var canStart: Bool { picked.count >= 2 && (interval ?? 0) >= 1 }
 
+    private func startHop(_ pts: [Bookmark], _ ms: Int, _ rnd: Bool) {
+        SessionStore.record("hop", SavedSession(name: SavedSession.defaultName(pts),
+                                                points: pts.map { SessionPoint(name: $0.name, lat: $0.lat, long: $0.long) },
+                                                intervalMs: ms, random: rnd))
+        onStart(pts, ms, rnd)
+        dismiss()
+    }
+
     var body: some View {
         NavigationView {
             List {
+                SessionsSections(kind: "hop", subtitle: { x in
+                    L("\(x.points.count) điểm · \(x.intervalMs ?? 1000) ms · \((x.random ?? false) ? "Ngẫu nhiên" : "Theo thứ tự") · \(sessionDateText(x.date))",
+                      "\(x.points.count) points · \(x.intervalMs ?? 1000) ms · \((x.random ?? false) ? "Random" : "In order") · \(sessionDateText(x.date))")
+                }, onLoad: { x in
+                    picked = x.bookmarks
+                    intervalText = "\(x.intervalMs ?? 1000)"
+                    random = x.random ?? false
+                }, onRun: { x in
+                    startHop(x.bookmarks, x.intervalMs ?? 1000, x.random ?? false)
+                })
                 Section {
                     HStack {
                         Text(L("Thời gian mỗi lần nhảy", "Time between jumps"))
@@ -1382,8 +1400,7 @@ struct HopSetupView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(L("Bắt đầu", "Start")) {
                         hideKeyboard()
-                        onStart(picked, interval ?? 1000, random)
-                        dismiss()
+                        startHop(picked, interval ?? 1000, random)
                     }
                     .font(.body.weight(.semibold))
                     .disabled(!canStart)
@@ -2296,9 +2313,26 @@ struct RouteSetupView: View {
     private var speedBinding: Binding<String> { walking ? $speedWalk : $speedCar }
     private var speed: Double? { Double(speedBinding.wrappedValue.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)) }
 
+    private func load(_ x: SavedSession) {
+        picked = x.bookmarks
+        if let w = x.walking { walking = w }
+        if let sp = x.speed { if walking { speedWalk = sp } else { speedCar = sp } }
+        segSpeeds = x.segSpeeds ?? [:]
+        if let st = x.stopSec { stopSecText = st }
+        if let e = x.end { endRaw = e }
+    }
+
     var body: some View {
         NavigationView {
             List {
+                SessionsSections(kind: "route", subtitle: { x in
+                    let mode = (x.walking ?? false) ? L("Đi bộ", "Walk") : L("Ô tô", "Car")
+                    return L("\(x.points.count) điểm · \(mode) \(x.speed ?? "") km/h · \(sessionDateText(x.date))",
+                             "\(x.points.count) points · \(mode) \(x.speed ?? "") km/h · \(sessionDateText(x.date))")
+                }, onLoad: { x in load(x) }, onRun: { x in
+                    load(x)
+                    DispatchQueue.main.async { begin() }
+                })
                 Section {
                     Picker("", selection: $walking) {
                         Text(L("🚗 Ô tô", "🚗 Car")).tag(false)
@@ -2409,7 +2443,12 @@ struct RouteSetupView: View {
 
     private func begin() {
         hideKeyboard()
+        guard picked.count >= 2 else { return }
         RouteRunner.shared.points = picked
+        SessionStore.record("route", SavedSession(name: SavedSession.defaultName(picked),
+                                                  points: picked.map { SessionPoint(name: $0.name, lat: $0.lat, long: $0.long) },
+                                                  walking: walking, speed: speedBinding.wrappedValue, segSpeeds: segSpeeds,
+                                                  stopSec: stopSecText, end: endRaw))
         busy = L("Đang tìm đường…", "Finding the route…")
         RouteRunner.buildOptions(points: picked, walking: walking, progress: { i, n in
             busy = n > 1 ? L("Đang tìm đường \(i)/\(n)…", "Finding the route \(i)/\(n)…") : L("Đang tìm đường…", "Finding the route…")
@@ -3248,4 +3287,159 @@ final class Bubble {
         last = json
         BubbleWriteStatus(json)
     }
+}
+
+// MARK: - History & favourites of hop sessions and trips
+
+struct SessionPoint: Codable, Equatable { var name: String; var lat: Double; var long: Double }
+
+struct SavedSession: Codable, Identifiable {
+    var id = UUID().uuidString
+    var name: String
+    var date: Double = Date().timeIntervalSince1970
+    var favorite = false
+    var points: [SessionPoint]
+    // hop
+    var intervalMs: Int? = nil
+    var random: Bool? = nil
+    // trip
+    var walking: Bool? = nil
+    var speed: String? = nil
+    var segSpeeds: [String: Double]? = nil
+    var stopSec: String? = nil
+    var end: String? = nil
+
+    var bookmarks: [Bookmark] { points.map { Bookmark(name: $0.name, lat: $0.lat, long: $0.long) } }
+    /// Same points + same settings = same session (no duplicates in history).
+    var signature: String {
+        points.map { String(format: "%.6f,%.6f", $0.lat, $0.long) }.joined(separator: ";")
+            + "|\(intervalMs ?? -1)|\(random ?? false)|\(walking ?? false)|\(speed ?? "")|\(stopSec ?? "")|\(end ?? "")"
+    }
+    static func defaultName(_ pts: [Bookmark]) -> String {
+        guard let a = pts.first, let b = pts.last else { return "" }
+        return "\(a.displayName) → \(b.displayName)"
+    }
+}
+
+enum SessionStore {
+    static func key(_ kind: String) -> String { kind == "hop" ? "hopSessions" : "routeSessions" }
+    static func load(_ kind: String) -> [SavedSession] {
+        guard let d = UserDefaults.standard.data(forKey: key(kind)),
+              let arr = try? JSONDecoder().decode([SavedSession].self, from: d) else { return [] }
+        return arr
+    }
+    static func save(_ kind: String, _ arr: [SavedSession]) {
+        if let d = try? JSONEncoder().encode(arr) { UserDefaults.standard.set(d, forKey: key(kind)) }
+        NotificationCenter.default.post(name: .sessionsChanged, object: kind)
+    }
+    /// Puts a session on top of the history (an identical one is moved up, keeping its name / favourite).
+    static func record(_ kind: String, _ sess: SavedSession) {
+        var arr = load(kind)
+        var item = sess
+        if let i = arr.firstIndex(where: { $0.signature == sess.signature }) {
+            item.id = arr[i].id; item.name = arr[i].name; item.favorite = arr[i].favorite
+            arr.remove(at: i)
+        }
+        item.date = Date().timeIntervalSince1970
+        arr.insert(item, at: 0)
+        var kept: [SavedSession] = []
+        var plain = 0
+        for x in arr { if x.favorite { kept.append(x) } else if plain < 50 { kept.append(x); plain += 1 } }
+        save(kind, kept)
+    }
+    static func update(_ kind: String, id: String, _ change: (inout SavedSession) -> Void) {
+        var arr = load(kind)
+        guard let i = arr.firstIndex(where: { $0.id == id }) else { return }
+        change(&arr[i])
+        save(kind, arr)
+    }
+    static func delete(_ kind: String, id: String) { save(kind, load(kind).filter { $0.id != id }) }
+}
+
+extension Notification.Name { static let sessionsChanged = Notification.Name("sessionsChanged") }
+
+/// "⭐ Favourites" + "🕘 History" sections. Left icon = run now, tap = load, hold = menu.
+struct SessionsSections: View {
+    let kind: String                                  // "hop" or "route"
+    var subtitle: (SavedSession) -> String
+    var onLoad: (SavedSession) -> Void
+    var onRun: (SavedSession) -> Void
+    @State private var items: [SavedSession] = []
+    @State private var showAll = false
+
+    private var icon: String { kind == "hop" ? "point.3.connected.trianglepath.dotted" : "arrow.triangle.turn.up.right.diamond" }
+    private var favs: [SavedSession] { items.filter { $0.favorite } }
+    private var history: [SavedSession] { items.filter { !$0.favorite } }
+
+    var body: some View {
+        Group {
+            if !favs.isEmpty {
+                Section { ForEach(favs) { row($0) } } header: { Text(L("⭐ Yêu thích", "⭐ Favourites")) }
+            }
+            if !history.isEmpty {
+                Section {
+                    ForEach(showAll ? history : Array(history.prefix(5))) { row($0) }
+                    if history.count > 5 {
+                        Button(showAll ? L("Thu gọn", "Show less") : L("Xem tất cả \(history.count) phiên", "Show all \(history.count)")) { showAll.toggle() }
+                            .font(.footnote)
+                    }
+                } header: { Text(L("🕘 Lịch sử", "🕘 History")) }
+            }
+        }
+        .onAppear { items = SessionStore.load(kind) }
+        .onReceive(NotificationCenter.default.publisher(for: .sessionsChanged)) { n in
+            if (n.object as? String) == kind { items = SessionStore.load(kind) }
+        }
+    }
+
+    private func row(_ x: SavedSession) -> some View {
+        HStack(spacing: 12) {
+            Button { onRun(x) } label: {
+                Image(systemName: icon)
+                    .font(.system(size: 22, weight: .regular))
+                    .foregroundColor(.accentColor)
+                    .frame(width: 40, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            VStack(alignment: .leading, spacing: 1) {
+                Text((x.favorite ? "⭐ " : "") + x.name).font(.body).foregroundColor(.primary).lineLimit(1)
+                Text(subtitle(x)).font(.caption).foregroundColor(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onLoad(x) }
+        .contextMenu {
+            Button { onRun(x) } label: { Label(L("Chạy ngay", "Run now"), systemImage: "play.fill") }
+            Button { onLoad(x) } label: { Label(L("Nạp để sửa", "Load to edit"), systemImage: "square.and.pencil") }
+            Button {
+                SessionStore.update(kind, id: x.id) { $0.favorite.toggle() }
+            } label: {
+                Label(x.favorite ? L("Bỏ khỏi Yêu thích", "Remove from Favourites") : L("Thêm vào Yêu thích", "Add to Favourites"),
+                      systemImage: x.favorite ? "star.slash" : "star")
+            }
+            Button {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    textPrompt(title: L("Đổi tên", "Rename"), placeholder: L("Tên phiên", "Name"), text: x.name) { n in
+                        SessionStore.update(kind, id: x.id) { $0.name = n }
+                    }
+                }
+            } label: { Label(L("Đổi tên", "Rename"), systemImage: "pencil") }
+            Button(role: .destructive) { SessionStore.delete(kind, id: x.id) } label: { Label(L("Xoá", "Delete"), systemImage: "trash") }
+        }
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) { SessionStore.delete(kind, id: x.id) } label: { Label(L("Xoá", "Delete"), systemImage: "trash") }
+            Button { SessionStore.update(kind, id: x.id) { $0.favorite.toggle() } } label: {
+                Label(L("Yêu thích", "Favourite"), systemImage: x.favorite ? "star.slash" : "star")
+            }
+            .tint(.yellow)
+        }
+    }
+}
+
+func sessionDateText(_ t: Double) -> String {
+    let f = DateFormatter()
+    f.dateFormat = "dd/MM HH:mm"
+    return f.string(from: Date(timeIntervalSince1970: t))
 }
