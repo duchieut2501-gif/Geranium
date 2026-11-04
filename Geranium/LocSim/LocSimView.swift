@@ -1214,7 +1214,17 @@ final class HopRunner: ObservableObject {
         timer?.invalidate()
         timer = nil
         paused = false
-        if isRunning { isRunning = false; BackgroundKeeper.shared.update() }
+        if isRunning {
+            isRunning = false
+            BackgroundKeeper.shared.update()
+            // settle on the last point (cancels hops still waiting); a new location set right after overrides it
+            if points.indices.contains(currentIndex) {
+                let p = points[currentIndex]
+                let alt = Double(UserDefaults.standard.string(forKey: "locAltitude") ?? "0") ?? 0
+                LocSimManager.startLocSim(location: CLLocation(coordinate: p.coordinate, altitude: alt, horizontalAccuracy: 5,
+                                                               verticalAccuracy: 5, timestamp: Date()), updateTimezone: false)
+            }
+        }
     }
 
     private func next() {
@@ -1234,7 +1244,7 @@ final class HopRunner: ObservableObject {
         let alt = Double(UserDefaults.standard.string(forKey: "locAltitude") ?? "0") ?? 0
         LocSimManager.startLocSim(location: CLLocation(coordinate: p.coordinate, altitude: alt,
                                                        horizontalAccuracy: 5, verticalAccuracy: 5, timestamp: Date()),
-                                   updateTimezone: intervalMs >= 100)   // very fast hops: skip the timezone refresh
+                                   updateTimezone: intervalMs >= 100, hop: true)   // very fast hops: skip the timezone refresh
         UserDefaults.standard.set("\(p.lat),\(p.long)", forKey: "activeLoc")
         step += 1
     }
@@ -1324,8 +1334,8 @@ struct HopSetupView: View {
                     }
                     .pickerStyle(.segmented)
                 } footer: {
-                    Text(L("1000 ms = 1 giây. Tối thiểu 1 ms (dưới 1000 ms các app khác có thể không thấy hết từng điểm). Theo thứ tự: nhảy lần lượt theo số thứ tự đã chọn rồi lặp lại. App cần đang mở thì mới nhảy tiếp.",
-                           "1000 ms = 1 second. Minimum 1 ms (below 1000 ms other apps may not see every point). In order: follows the numbers you picked, then loops. The app must stay open to keep hopping."))
+                    Text(L("1000 ms = 1 giây. Tối thiểu 1 ms. Dưới 200 ms máy có thể nhảy chậm hơn số đặt vì iOS không xử lý kịp; dưới 1000 ms các app khác có thể không thấy hết từng điểm. Theo thứ tự: nhảy lần lượt theo số thứ tự đã chọn rồi lặp lại. App cần đang mở thì mới nhảy tiếp.",
+                           "1000 ms = 1 second. Minimum 1 ms. Below 200 ms the phone may hop slower than set (iOS cannot keep up); below 1000 ms other apps may not see every point. In order: follows the numbers you picked, then loops. The app must stay open to keep hopping."))
                 }
 
                 Section {
@@ -1360,7 +1370,7 @@ struct HopSetupView: View {
                 Section {
                     Picker("", selection: $source) {
                         Text(LocList.bookmarks.title).tag(LocList.bookmarks)
-                        Text(LocList.history.title).tag(LocList.history)
+                        Text(L("Lịch sử vị trí", "Location history")).tag(LocList.history)
                     }
                     .pickerStyle(.segmented)
                     TextField(L("Tìm…", "Search…"), text: $search).disableAutocorrection(true)
@@ -1390,7 +1400,7 @@ struct HopSetupView: View {
                         }
                     }
                 } header: {
-                    Text(L("Chọn điểm (bấm theo thứ tự muốn nhảy)", "Pick points (tap in the order to hop)"))
+                    Text(L("Lấy điểm từ (bấm theo thứ tự muốn nhảy)", "Take points from (tap in the order to hop)"))
                 }
             }
             .navigationTitle(L("Nhảy cóc", "Hop"))
@@ -2210,7 +2220,7 @@ struct PointPickerSections: View {
         Section {
             Picker("", selection: $source) {
                 Text(LocList.bookmarks.title).tag(LocList.bookmarks)
-                Text(LocList.history.title).tag(LocList.history)
+                Text(L("Lịch sử vị trí", "Location history")).tag(LocList.history)
             }
             .pickerStyle(.segmented)
             TextField(L("Tìm…", "Search…"), text: $search).disableAutocorrection(true)
@@ -2235,7 +2245,7 @@ struct PointPickerSections: View {
                 }
             }
         } header: {
-            Text(L("Chọn điểm (bấm theo thứ tự đi)", "Pick points (tap in travel order)"))
+            Text(L("Lấy điểm từ (bấm theo thứ tự đi)", "Take points from (tap in travel order)"))
         }
         .onAppear { items = loadList(source) }
         .onChange(of: source) { items = loadList($0) }
@@ -3376,14 +3386,20 @@ struct SessionsSections: View {
             if !favs.isEmpty {
                 Section { ForEach(favs) { row($0) } } header: { Text(L("⭐ Yêu thích", "⭐ Favourites")) }
             }
-            if !history.isEmpty {
-                Section {
+            Section {
+                if history.isEmpty {
+                    Text(kind == "hop" ? L("Chưa có lần nhảy cóc nào. Chạy một lần sẽ được lưu ở đây.", "No hops yet. Each run is saved here.")
+                                       : L("Chưa có lộ trình nào. Chạy một lần sẽ được lưu ở đây.", "No trips yet. Each run is saved here."))
+                        .font(.footnote).foregroundColor(.secondary)
+                } else {
                     ForEach(showAll ? history : Array(history.prefix(5))) { row($0) }
                     if history.count > 5 {
-                        Button(showAll ? L("Thu gọn", "Show less") : L("Xem tất cả \(history.count) phiên", "Show all \(history.count)")) { showAll.toggle() }
+                        Button(showAll ? L("Thu gọn", "Show less") : L("Xem tất cả \(history.count) lần", "Show all \(history.count)")) { showAll.toggle() }
                             .font(.footnote)
                     }
-                } header: { Text(L("🕘 Lịch sử", "🕘 History")) }
+                }
+            } header: {
+                Text(kind == "hop" ? L("🕘 Các lần nhảy cóc", "🕘 Past hops") : L("🕘 Các lộ trình đã chạy", "🕘 Past trips"))
             }
         }
         .onAppear { items = SessionStore.load(kind) }
