@@ -3261,6 +3261,10 @@ final class Bubble {
             }
             Bubble.shared.push()
         }
+        // hidden while the app is open, shown when leaving it
+        for n in [UIApplication.didBecomeActiveNotification, UIApplication.willResignActiveNotification, UIApplication.didEnterBackgroundNotification] {
+            NotificationCenter.default.addObserver(forName: n, object: nil, queue: .main) { _ in Bubble.shared.push() }
+        }
         refresh()
     }
 
@@ -3284,10 +3288,11 @@ final class Bubble {
     func push() {
         guard enabled else { return }
         let simulating = !(UserDefaults.standard.string(forKey: "activeLoc") ?? "").isEmpty
+        let inApp = UIApplication.shared.applicationState == .active
         let r = RouteRunner.shared, h = HopRunner.shared
         let (a, b) = FloatWindow.shared.statusLines
         let dict: [String: Any] = [
-            "show": simulating, "title": a, "sub": b,
+            "show": simulating && !inApp, "title": a, "sub": b,
             "paused": r.state == .paused || h.paused,
             "canPause": (r.isActive && r.state != .arrived) || h.isRunning,
             "canSpeed": r.isActive && r.state != .arrived,

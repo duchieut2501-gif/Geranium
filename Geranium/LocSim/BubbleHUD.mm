@@ -25,6 +25,7 @@ extern "C" {
 }
 
 extern "C" char **environ;
+extern "C" int SBSLaunchApplicationWithIdentifier(CFStringRef identifier, Boolean suspended);
 
 #define PID_PATH "/var/mobile/Library/Caches/com.locationsimulator.bubble.pid"
 #define STATUS_PATH @"/var/mobile/Library/Caches/com.locationsimulator.bubble.json"
@@ -39,7 +40,7 @@ extern "C" int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t *__res
 extern "C" int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *__restrict, uid_t);
 
 static const CGFloat kBubble = 54;
-static const CGFloat kPanelW = 300, kPanelH = 132;
+static const CGFloat kPanelW = 330, kPanelH = 132;
 
 #pragma mark - Window (only as big as the bubble / panel, so the rest of the screen stays touchable)
 
@@ -68,7 +69,7 @@ static void SendCommand(int cmd) {
     UIView *_bubble;
     UIView *_panel;
     UILabel *_title, *_sub;
-    UIButton *_stopBtn, *_pauseBtn, *_minusBtn, *_plusBtn;
+    UIButton *_stopBtn, *_pauseBtn, *_minusBtn, *_plusBtn, *_openBtn;
     BOOL _expanded, _visible;
     NSDate *_lastSeen;
     CGPoint _bubbleOrigin;
@@ -125,6 +126,8 @@ static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
     _pauseBtn = RoundButton(@"pause.fill", [UIColor colorWithWhite:0.25 alpha:1]);
     _minusBtn = RoundButton(@"minus", [UIColor colorWithWhite:0.25 alpha:1]);
     _plusBtn = RoundButton(@"plus", [UIColor colorWithWhite:0.25 alpha:1]);
+    _openBtn = RoundButton(@"arrow.up.forward.app", [UIColor colorWithRed:0.20 green:0.47 blue:0.96 alpha:1]);
+    [_openBtn addTarget:self action:@selector(openTap) forControlEvents:UIControlEventTouchUpInside];
     [_stopBtn addTarget:self action:@selector(stopTap) forControlEvents:UIControlEventTouchUpInside];
     [_pauseBtn addTarget:self action:@selector(pauseTap) forControlEvents:UIControlEventTouchUpInside];
     [_minusBtn addTarget:self action:@selector(minusTap) forControlEvents:UIControlEventTouchUpInside];
@@ -134,7 +137,7 @@ static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
     texts.axis = UILayoutConstraintAxisVertical; texts.spacing = 2;
     UIStackView *top = [[UIStackView alloc] initWithArrangedSubviews:@[texts, close]];
     top.alignment = UIStackViewAlignmentTop; top.spacing = 8;
-    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[_stopBtn, _pauseBtn, _minusBtn, _plusBtn]];
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[_openBtn, _stopBtn, _pauseBtn, _minusBtn, _plusBtn]];
     row.distribution = UIStackViewDistributionEqualSpacing;
     UIStackView *all = [[UIStackView alloc] initWithArrangedSubviews:@[top, row]];
     all.axis = UILayoutConstraintAxisVertical; all.spacing = 12;
@@ -226,6 +229,16 @@ static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
     SendCommand(1);
     _expanded = NO; _visible = NO;
     [self place];
+}
+- (void)openTap {
+    _expanded = NO;
+    [self place];
+    NSString *bid = NSBundle.mainBundle.bundleIdentifier ?: @"com.locationsimulator.app";
+    if (SBSLaunchApplicationWithIdentifier((__bridge CFStringRef)bid, false) != 0) {
+        id ws = [objc_getClass("LSApplicationWorkspace") performSelector:@selector(defaultWorkspace)];
+        if ([ws respondsToSelector:@selector(openApplicationWithBundleID:)])
+            [ws performSelector:@selector(openApplicationWithBundleID:) withObject:bid];
+    }
 }
 - (void)pauseTap { SendCommand(2); }
 - (void)minusTap { SendCommand(3); }
