@@ -264,11 +264,19 @@ struct LocSimView: View {
                     }
                     .padding(.trailing, 10)
                 }
-                // Floating window (picture in picture): show now / keep it off for now
-                if pipEnabled && isFaking {
+                // Bubble now (go home with the bubble) + floating window (picture in picture) buttons
+                if isFaking {
                     HStack {
                         Spacer()
                         VStack(spacing: 8) {
+                            Button { Bubble.shared.showAndGoHome() } label: {
+                                Image(systemName: "capsule.portrait.fill")
+                                    .font(.system(size: 18, weight: .medium)).foregroundColor(.accentColor)
+                                    .frame(width: 44, height: 44)
+                                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.systemBackground)))
+                                    .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+                            }
+                            if pipEnabled {
                             Button { FloatWindow.shared.showNowAndGoHome() } label: {
                                 Image(systemName: "pip.enter")
                                     .font(.system(size: 18, weight: .medium)).foregroundColor(.accentColor)
@@ -283,6 +291,7 @@ struct LocSimView: View {
                                     .frame(width: 44, height: 44)
                                     .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.systemBackground)))
                                     .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+                            }
                             }
                         }
                         .padding(.trailing, 10)
@@ -3288,7 +3297,29 @@ final class Bubble {
     private var restartedThisLaunch = false
     /// Changes each time the app is left (a bubble hidden by the user comes back then).
     var bgId: Double = Date().timeIntervalSince1970
-    private var enabled: Bool { UserDefaults.standard.bool(forKey: "bubbleEnabled") }
+    private var setting: Bool { UserDefaults.standard.bool(forKey: "bubbleEnabled") }
+    /// Bubble asked with the map button: shown until the app is opened again.
+    private var oneShot = false
+    private var enabled: Bool { setting || oneShot }
+
+    /// Map button: go to the home screen with the bubble showing (even if it is off in Settings).
+    func showAndGoHome() {
+        oneShot = true
+        let wasRunning = BubbleIsRunning()
+        if !wasRunning { BubbleSetEnabled(true); restartedThisLaunch = true }
+        startTimer()
+        DispatchQueue.main.asyncAfter(deadline: .now() + (wasRunning ? 0.15 : 1.0)) {
+            UIControl().sendAction(#selector(URLSessionTask.suspend), to: UIApplication.shared, for: nil)   // back to home screen
+        }
+    }
+
+    private func startTimer() {
+        if timer == nil {
+            let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.push() }
+            RunLoop.main.add(t, forMode: .common)
+            timer = t
+        }
+    }
 
     func prepare() {
         guard !prepared else { return }
@@ -3310,7 +3341,8 @@ final class Bubble {
         for n in [UIApplication.didBecomeActiveNotification, UIApplication.willResignActiveNotification, UIApplication.didEnterBackgroundNotification] {
             NotificationCenter.default.addObserver(forName: n, object: nil, queue: .main) { note in
                 if note.name == UIApplication.willResignActiveNotification { Bubble.shared.bgId = Date().timeIntervalSince1970 }
-                Bubble.shared.push()
+                if note.name == UIApplication.didBecomeActiveNotification { Bubble.shared.oneShot = false }
+                Bubble.shared.push(force: true)
             }
         }
         refresh()
@@ -3319,11 +3351,7 @@ final class Bubble {
     func refresh() {
         if enabled {
             if !BubbleIsRunning() || !restartedThisLaunch { BubbleSetEnabled(true); restartedThisLaunch = true }
-            if timer == nil {
-                let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.push() }
-                RunLoop.main.add(t, forMode: .common)
-                timer = t
-            }
+            startTimer()
             last = ""
             push()
         } else {
@@ -3333,14 +3361,14 @@ final class Bubble {
     }
 
     /// Sends what the bubble should show (only when it changed).
-    func push() {
-        guard enabled else { return }
+    func push(force: Bool = false) {
+        guard enabled || (force && BubbleIsRunning()) else { return }
         let simulating = !(UserDefaults.standard.string(forKey: "activeLoc") ?? "").isEmpty
         let inApp = UIApplication.shared.applicationState == .active
         let r = RouteRunner.shared, h = HopRunner.shared
         let (a, b) = FloatWindow.shared.statusLines
         let dict: [String: Any] = [
-            "show": simulating && !inApp, "bgId": bgId, "title": a, "sub": b,
+            "show": simulating && !inApp && enabled, "bgId": bgId, "title": a, "sub": b,
             "paused": r.state == .paused || h.paused,
             "canPause": (r.isActive && r.state != .arrived) || h.isRunning,
             "canSpeed": r.isActive && r.state != .arrived,

@@ -40,7 +40,7 @@ extern "C" int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t *__res
 extern "C" int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *__restrict, uid_t);
 
 static const CGFloat kBubble = 54;
-static const CGFloat kPillH = 108;   // bubble = pill: top half opens the panel, bottom half stops
+static const CGFloat kSeg = 50;   // pill = stacked cells: open app / pause (trip & hop) / hide / stop
 static const CGFloat kPanelW = 330, kPanelH = 132;
 
 #pragma mark - Window (only as big as the bubble / panel, so the rest of the screen stays touchable)
@@ -75,6 +75,8 @@ static void SendCommand(int cmd) {
     BOOL _expanded, _visible;
     NSDate *_lastSeen;
     CGPoint _bubbleOrigin;
+    BOOL _canPause, _paused;
+    NSArray<NSString *> *_cells;
 }
 
 static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
@@ -94,24 +96,18 @@ static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
     self.view.backgroundColor = UIColor.clearColor;
 
     // Bubble
-    _bubble = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kBubble, kPillH)];
+    _bubble = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kBubble, kSeg * 3)];
     _bubble.backgroundColor = [UIColor colorWithRed:0.93 green:0.26 blue:0.24 alpha:0.95];
     _bubble.layer.cornerRadius = kBubble / 2;
     _bubble.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.9].CGColor;
     _bubble.layer.borderWidth = 2;
-    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"location.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightSemibold]]];
-    icon.tintColor = UIColor.whiteColor;
-    icon.center = CGPointMake(kBubble / 2, kPillH / 4);
-    [_bubble addSubview:icon];
-    UIView *line = [[UIView alloc] initWithFrame:CGRectMake(10, kPillH / 2 - 0.5, kBubble - 20, 1)];
-    line.backgroundColor = [UIColor colorWithWhite:1 alpha:0.6];
-    [_bubble addSubview:line];
-    UIImageView *stopIcon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"stop.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightBold]]];
-    stopIcon.tintColor = UIColor.whiteColor;
-    stopIcon.center = CGPointMake(kBubble / 2, kPillH * 3 / 4);
-    [_bubble addSubview:stopIcon];
+    _bubble.clipsToBounds = YES;
     [_bubble addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(pillTap:)]];
     [_bubble addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)]];
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(pillHold:)];
+    lp.minimumPressDuration = 0.5;
+    [_bubble addGestureRecognizer:lp];
+    [self buildPill];
     [self.view addSubview:_bubble];
 
     // Panel
@@ -178,6 +174,37 @@ static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
     [self poll:YES];
 }
 
+- (CGFloat)pillH { return kSeg * (CGFloat)_cells.count; }
+
+/// Cells from top: open app, pause / go on (only for trips and hops), hide, stop.
+- (void)buildPill {
+    NSMutableArray *c = [NSMutableArray arrayWithObject:@"open"];
+    if (_canPause) [c addObject:@"pause"];
+    [c addObjectsFromArray:@[@"hide", @"stop"]];
+    if (_cells && [_cells isEqualToArray:c] && _bubble.subviews.count) {
+        // only refresh the pause icon
+    }
+    _cells = c;
+    for (UIView *v in [_bubble.subviews copy]) [v removeFromSuperview];
+    _bubble.frame = CGRectMake(0, 0, kBubble, [self pillH]);
+    for (NSUInteger i = 0; i < _cells.count; i++) {
+        NSString *k = _cells[i];
+        NSString *sym = [k isEqualToString:@"open"] ? @"arrow.up.forward.app.fill"
+                      : [k isEqualToString:@"pause"] ? (_paused ? @"play.fill" : @"pause.fill")
+                      : [k isEqualToString:@"hide"] ? @"eye.slash.fill" : @"stop.fill";
+        UIImageView *iv = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:sym withConfiguration:
+                              [UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightBold]]];
+        iv.tintColor = UIColor.whiteColor;
+        iv.center = CGPointMake(kBubble / 2, kSeg * i + kSeg / 2);
+        [_bubble addSubview:iv];
+        if (i > 0) {
+            UIView *line = [[UIView alloc] initWithFrame:CGRectMake(10, kSeg * i - 0.5, kBubble - 20, 1)];
+            line.backgroundColor = [UIColor colorWithWhite:1 alpha:0.55];
+            [_bubble addSubview:line];
+        }
+    }
+}
+
 - (void)place {
     CGSize scr = UIScreen.mainScreen.bounds.size;
     if (!_visible) { self.win.hidden = YES; return; }
@@ -188,8 +215,10 @@ static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
         self.win.frame = CGRectMake(x, y, kPanelW, kPanelH);
         _panel.frame = CGRectMake(0, 0, kPanelW, kPanelH);
     } else {
-        self.win.frame = CGRectMake(_bubbleOrigin.x, _bubbleOrigin.y, kBubble, kPillH);
-        _bubble.frame = CGRectMake(0, 0, kBubble, kPillH);
+        CGSize scr2 = UIScreen.mainScreen.bounds.size;
+        _bubbleOrigin.y = MIN(_bubbleOrigin.y, scr2.height - [self pillH] - 20);
+        self.win.frame = CGRectMake(_bubbleOrigin.x, _bubbleOrigin.y, kBubble, [self pillH]);
+        _bubble.frame = CGRectMake(0, 0, kBubble, [self pillH]);
     }
     _bubble.hidden = _expanded;
     _panel.hidden = !_expanded;
@@ -211,6 +240,8 @@ static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
     _title.text = j[@"title"] ?: @"";
     _sub.text = j[@"sub"] ?: @"";
     BOOL canPause = [j[@"canPause"] boolValue], canSpeed = [j[@"canSpeed"] boolValue];
+    BOOL paused = [j[@"paused"] boolValue];
+    if (canPause != _canPause || paused != _paused) { _canPause = canPause; _paused = paused; [self buildPill]; if (_visible) [self place]; }
     _pauseBtn.hidden = !canPause;
     _minusBtn.hidden = !canSpeed;
     _plusBtn.hidden = !canSpeed;
@@ -221,12 +252,21 @@ static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
 
 - (void)toggle { _expanded = !_expanded; [self place]; }
 
-/// Top half = open the panel, bottom half = stop simulating.
+/// Tap a cell = do it right away. Hold = status panel with speed – / +.
 - (void)pillTap:(UITapGestureRecognizer *)g {
-    if ([g locationInView:_bubble].y > kPillH / 2) {
-        [[UIImpactFeedbackGenerator.alloc initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-        [self stopTap];
-    } else {
+    NSInteger i = (NSInteger)([g locationInView:_bubble].y / kSeg);
+    if (i < 0 || i >= (NSInteger)_cells.count) return;
+    [[UIImpactFeedbackGenerator.alloc initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    NSString *k = _cells[i];
+    if ([k isEqualToString:@"open"]) [self openTap];
+    else if ([k isEqualToString:@"pause"]) { _paused = !_paused; [self buildPill]; [self pauseTap]; }
+    else if ([k isEqualToString:@"hide"]) [self hideTap];
+    else [self stopTap];
+}
+
+- (void)pillHold:(UILongPressGestureRecognizer *)g {
+    if (g.state == UIGestureRecognizerStateBegan) {
+        [[UIImpactFeedbackGenerator.alloc initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
         [self toggle];
     }
 }
@@ -236,7 +276,7 @@ static UIButton *RoundButton(NSString *symbol, UIColor *bg) {
     [g setTranslation:CGPointZero inView:nil];
     CGSize scr = UIScreen.mainScreen.bounds.size;
     _bubbleOrigin.x = MIN(MAX(_bubbleOrigin.x + d.x, 0), scr.width - kBubble);
-    _bubbleOrigin.y = MIN(MAX(_bubbleOrigin.y + d.y, 40), scr.height - kPillH - 20);
+    _bubbleOrigin.y = MIN(MAX(_bubbleOrigin.y + d.y, 40), scr.height - [self pillH] - 20);
     if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
         _bubbleOrigin.x = (_bubbleOrigin.x + kBubble / 2 < scr.width / 2) ? 6 : scr.width - kBubble - 6;   // stick to the edge
         [NSStringFromCGPoint(_bubbleOrigin) writeToFile:POS_PATH atomically:YES encoding:NSUTF8StringEncoding error:nil];
