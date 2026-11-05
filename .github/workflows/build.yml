@@ -45,14 +45,16 @@ jobs:
           path: build/LocationSimulator.tipa
           if-no-files-found: error
 
-      - name: Publish release (direct download link)
+      - name: Publish release (one per version)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VER=$(grep -m1 -o 'MARKETING_VERSION = [0-9.]*' Geranium.xcodeproj/project.pbxproj | awk '{print $3}')
           cp build/LocationSimulator.tipa "build/LocationSimulator_${VER}.tipa"
+          # one release per version (older versions stay); a rebuild of the same version replaces it
           gh release delete build -y --cleanup-tag -R "$GITHUB_REPOSITORY" || true
-          gh release create build "build/LocationSimulator_${VER}.tipa" -R "$GITHUB_REPOSITORY" \
-            --title "Location Simulator ${VER} (latest build)" \
+          gh release delete "v${VER}" -y --cleanup-tag -R "$GITHUB_REPOSITORY" || true
+          gh release create "v${VER}" "build/LocationSimulator_${VER}.tipa" -R "$GITHUB_REPOSITORY" \
+            --title "Location Simulator ${VER}" \
             --notes "Built at $(TZ=Asia/Ho_Chi_Minh date '+%H:%M, %d/%m/%Y') (UTC+7). Open LocationSimulator_${VER}.tipa with TrollStore to install." \
             --target "$GITHUB_SHA" --latest
