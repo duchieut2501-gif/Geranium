@@ -41,6 +41,7 @@ struct CustomMapView: UIViewRepresentable {
         mapView.pointOfInterestFilter = .includingAll
         // Allow zooming in closer than the default limit.
         mapView.setCameraZoomRange(MKMapView.CameraZoomRange(minCenterCoordinateDistance: 15), animated: false)
+        addKeyboardDismiss(to: mapView)
         return mapView
     }
 
@@ -245,5 +246,25 @@ struct ZoomSlider: View {
         }
         .padding(.vertical, 10)
         .background(Capsule().fill(.ultraThinMaterial))
+    }
+}
+
+
+/// Touching or moving the map closes the keyboard (search field).
+final class KeyboardDismisser: NSObject, UIGestureRecognizerDelegate {
+    static let shared = KeyboardDismisser()
+    @objc func dismiss() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+}
+
+func addKeyboardDismiss(to view: UIView) {
+    let tap = UITapGestureRecognizer(target: KeyboardDismisser.shared, action: #selector(KeyboardDismisser.dismiss))
+    let pan = UIPanGestureRecognizer(target: KeyboardDismisser.shared, action: #selector(KeyboardDismisser.dismiss))
+    for g in [tap, pan] as [UIGestureRecognizer] {
+        g.cancelsTouchesInView = false
+        g.delegate = KeyboardDismisser.shared
+        view.addGestureRecognizer(g)
     }
 }

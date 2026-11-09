@@ -173,6 +173,7 @@ struct LocSimView: View {
 
     private var mapLayer: some View {
         mapContent
+            .ignoresSafeArea(.keyboard)        // keyboard must not move the map or the centre pin
             .sheet(isPresented: $hopSheet) {
                 HopSetupView(pinCoordinate: centerCoordinate.map { CoordTransform.gcj02ToWgs84($0) }) { points, ms, random in
                     RouteRunner.shared.stop()
@@ -2552,6 +2553,7 @@ struct PickMapView: UIViewRepresentable {
         m.delegate = context.coordinator
         m.showsUserLocation = true
         m.pointOfInterestFilter = .includingAll
+        addKeyboardDismiss(to: m)
         if let s = start {
             m.setRegion(MKCoordinateRegion(center: s, latitudinalMeters: 1500, longitudinalMeters: 1500), animated: false)
         }
@@ -2628,7 +2630,9 @@ struct MapPointPicker: View {
             ZStack {
                 PickMapView(start: start, markers: markers, center: $center, recenterTick: recenterTick, focus: focusTick)
                     .ignoresSafeArea(edges: .bottom)
+                    .ignoresSafeArea(.keyboard)
                 CenterPin()
+                    .ignoresSafeArea(.keyboard)
                 VStack {
                     MapSearchBar(near: center ?? start) { c, _ in focusTick = EquatableCoordinate(coordinate: c) }
                         .padding(.horizontal, 12)
