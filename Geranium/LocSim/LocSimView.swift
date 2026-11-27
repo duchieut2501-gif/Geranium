@@ -82,7 +82,7 @@ struct LocSimView: View {
     @State private var focusCoordinate: EquatableCoordinate? = nil
     @State private var isFaking = false
     @State private var settingsSheet = false
-    @State private var placesTab: PlacesTab = .bookmarks
+    @State private var placesTab: PlacesTab = .favorites
     @State private var zoomLevel: Double = 0.5           // 0 = far out (top), 1 = close in (bottom)
     @State private var zoomRequest: ZoomRequest? = nil
     @State private var savePin: PlaceEdit? = nil
@@ -165,7 +165,7 @@ struct LocSimView: View {
         .id(appLanguage)                                  // rebuild everything when the language changes
         .dynamicTypeSize((TextSizeOption(rawValue: textSize) ?? .small).dynamicType)
         .onChange(of: tab) { newTab in
-            if newTab == .places { placesTab = .bookmarks }   // always open on Bookmarks
+            if newTab == .places { placesTab = .favorites }   // always open on Favourites
         }
         .onReceive(NotificationCenter.default.publisher(for: .simStoppedFromPiP)) { _ in
             withAnimation(.easeInOut(duration: 0.2)) { isFaking = false }
