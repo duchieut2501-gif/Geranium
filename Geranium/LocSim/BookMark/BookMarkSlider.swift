@@ -23,6 +23,8 @@ enum BookmarkViewMode: String { case all, folders }
 
 struct LocationListView: View {
     let list: LocList
+    /// Favourites tab: only favourite places and favourite lists.
+    var favoritesOnly = false
     var onStart: (Bookmark) -> Void
     var onShowOnMap: (Bookmark) -> Void
 
@@ -117,22 +119,37 @@ struct LocationListView: View {
     private var content: some View {
         if isSearching || !usesFolders {
             // Flat list (search results or History)
-            ForEach(filterAndSort(items, search: search, sort: sort)) { item in
+            ForEach(filterAndSort(favoritesOnly ? favouritePool : items, search: search, sort: sort)) { item in
                 placeRow(item, indent: false, showFolder: usesFolders)
             }
         } else if let folder = openFolder {
             ForEach(sorted(items.filter { $0.folders.contains(folder) })) { item in
                 placeRow(item, indent: false, showFolder: false)
             }
-        } else {
-            // ⭐ Favourites: always on top and always open
+        } else if favoritesOnly {
+            // ⭐ Favourites tab: favourite lists, then favourite places
+            let favFolderList = folders.filter { favFolders.contains($0) }
             let favs = sorted(items.filter { $0.favorite })
+            if favFolderList.isEmpty && favs.isEmpty {
+                Text(L("Chưa có mục yêu thích. Ấn giữ một địa điểm hoặc một danh sách rồi chọn \"Thêm vào Yêu thích\".",
+                       "No favourites yet. Press and hold a place or a list, then choose \"Add to Favourites\"."))
+                    .font(.footnote).foregroundColor(.secondary)
+            }
+            ForEach(favFolderList, id: \.self) { folder in
+                folderRow(folder)
+                if viewMode == .all && !collapsed.contains(folder) {
+                    ForEach(sorted(items.filter { $0.folders.contains(folder) })) { item in
+                        placeRow(item, indent: true, showFolder: false)
+                    }
+                }
+            }
             if !favs.isEmpty {
                 favouritesHeader(count: favs.count)
                 ForEach(favs) { item in
                     placeRow(item, indent: true, showFolder: false)
                 }
             }
+        } else {
             ForEach(folders, id: \.self) { folder in
                 folderRow(folder)
                 if viewMode == .all && !collapsed.contains(folder) {
@@ -164,6 +181,11 @@ struct LocationListView: View {
     }
 
     private func sorted(_ arr: [Bookmark]) -> [Bookmark] { filterAndSort(arr, search: "", sort: sort) }
+
+    /// Places shown in the Favourites tab (favourite places + places in favourite lists).
+    private var favouritePool: [Bookmark] {
+        items.filter { $0.favorite || $0.folders.contains(where: { favFolders.contains($0) }) }
+    }
 
     private func placeRow(_ item: Bookmark, indent: Bool, showFolder: Bool) -> some View {
         HStack(spacing: 12) {

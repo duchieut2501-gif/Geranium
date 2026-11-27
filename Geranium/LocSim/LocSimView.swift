@@ -36,10 +36,16 @@ enum MainTab: String, CaseIterable, Identifiable {
 }
 
 enum PlacesTab: String, CaseIterable, Identifiable {
-    case bookmarks, history
+    case favorites, bookmarks, history
     var id: String { rawValue }
-    var title: String { self == .bookmarks ? L("Đánh dấu", "Bookmarks") : L("Lịch sử", "History") }
-    var list: LocList { self == .bookmarks ? .bookmarks : .history }
+    var title: String {
+        switch self {
+        case .favorites: return L("Yêu thích", "Favourites")
+        case .bookmarks: return L("Đánh dấu", "Bookmarks")
+        case .history: return L("Lịch sử", "History")
+        }
+    }
+    var list: LocList { self == .history ? .history : .bookmarks }
 }
 
 /// App-wide text size (Settings). Default "small" like Mika's LocSim, independent of the iPhone setting.
@@ -105,6 +111,7 @@ struct LocSimView: View {
                         .padding(.horizontal, 12)
                         .padding(.top, 6)
                         LocationListView(list: placesTab.list,
+                                         favoritesOnly: placesTab == .favorites,
                                          onStart: { item in
                                              fake(wgs: item.coordinate)
                                              focus(CoordTransform.wgs84ToGcj02(item.coordinate))   // map follows, tab stays
@@ -133,8 +140,16 @@ struct LocSimView: View {
                     .frame(width: 170)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { settingsSheet = true } label: {
-                        Image(systemName: "gearshape").font(.system(size: 17))
+                    // ≡ menu: a small menu over the screen, same on the map and the lists
+                    Menu {
+                        Button { settingsSheet = true } label: { Label(L("Cài đặt", "Settings"), systemImage: "gearshape") }
+                        Button(action: enterCoordinates) { Label(L("Nhập toạ độ", "Enter coordinates"), systemImage: "keyboard") }
+                        Button { hopSheet = true } label: { Label(L("Nhảy cóc", "Hop"), systemImage: "point.3.connected.trianglepath.dotted") }
+                        Button { routeSheet = true } label: { Label(L("Đi theo đường", "Follow roads"), systemImage: "arrow.triangle.turn.up.right.diamond") }
+                        Button { Bubble.shared.showAndGoHome() } label: { Label(L("Bong bóng nổi", "Floating bubble"), systemImage: "capsule.portrait") }
+                            .disabled(!isFaking)
+                    } label: {
+                        Image(systemName: "line.3.horizontal").font(.system(size: 19, weight: .medium))
                     }
                 }
             }
@@ -226,57 +241,12 @@ struct LocSimView: View {
 
             // Enter coordinates: top-right, under the settings button (away from Play)
             VStack {
-                HStack {
-                    Spacer()
-                    Button(action: enterCoordinates) {
-                        Image(systemName: "keyboard")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundColor(.accentColor)
-                            .frame(width: 44, height: 44)
-                            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.systemBackground)))
-                            .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
-                    }
-                    .padding(.trailing, 10)
-                    .padding(.top, 10)
-                }
-                // Hop between several points: under the keyboard button
-                HStack {
-                    Spacer()
-                    Button { hopSheet = true } label: {
-                        Image(systemName: "point.3.connected.trianglepath.dotted")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundColor(.accentColor)
-                            .frame(width: 44, height: 44)
-                            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.systemBackground)))
-                            .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
-                    }
-                    .padding(.trailing, 10)
-                }
-                // Follow roads A → stops → B: under the hop button
-                HStack {
-                    Spacer()
-                    Button { routeSheet = true } label: {
-                        Image(systemName: "arrow.triangle.turn.up.right.diamond")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundColor(.accentColor)
-                            .frame(width: 44, height: 44)
-                            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.systemBackground)))
-                            .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
-                    }
-                    .padding(.trailing, 10)
-                }
-                // Bubble now (go home with the bubble) + floating window (picture in picture) buttons
-                if isFaking {
+                Color.clear.frame(height: 62).allowsHitTesting(false)      // room for the search bar
+                // Floating window (picture in picture) buttons, under the search bar
+                if isFaking && pipEnabled {
                     HStack {
                         Spacer()
                         VStack(spacing: 8) {
-                            Button { Bubble.shared.showAndGoHome() } label: {
-                                Image(systemName: "capsule.portrait.fill")
-                                    .font(.system(size: 18, weight: .medium)).foregroundColor(.accentColor)
-                                    .frame(width: 44, height: 44)
-                                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.systemBackground)))
-                                    .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
-                            }
                             if pipEnabled {
                             Button { FloatWindow.shared.showNowAndGoHome() } label: {
                                 Image(systemName: "pip.enter")
@@ -311,7 +281,7 @@ struct LocSimView: View {
             VStack {
                 MapSearchBar(near: centerCoordinate) { c, _ in focus(c) }
                     .padding(.leading, 10)
-                    .padding(.trailing, 64)
+                    .padding(.trailing, 10)
                     .padding(.top, 10)
                 Spacer()
             }
